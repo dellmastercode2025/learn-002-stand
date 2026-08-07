@@ -1,0 +1,25 @@
+name: Vessel owner lookup
+on:
+  push:
+    branches: [vessel-owner-lookup]
+  workflow_dispatch:
+
+jobs:
+  lookup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Run owner lookup
+        run: python lookup_owners.py vessels.csv owners.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vessel-owner-results
+          path: |
+            owners.csv
+            summary.json
+          if-no-files-found: error
