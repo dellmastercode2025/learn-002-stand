@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.local
+*.log
+journey-fail.png
+*.png
+!public/**/*.png
+.DS_Store

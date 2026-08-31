@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Сыфаты в таджвиде — интерактивный курс</title>
+    <meta
+      name="description"
+      content="Интерактивный курс о сыфатах букв в таджвиде: 12 уроков, схемы артикуляции, карта сыфатов, тренажёры и тесты. Перестань заучивать таблицы — начни понимать, как рождается звук."
+    />
+    <meta property="og:title" content="Сыфаты в таджвиде — интерактивный курс" />
+    <meta
+      property="og:description"
+      content="12 последовательных уроков, схемы, примеры и практика помогут превратить «тёмный лес» сыфатов в понятную систему."
+    />
+    <meta property="og:type" content="website" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='46' fill='%236c8d5b'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='%23fdfbf5' font-family='serif'%3E%D8%B5%3C/text%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Amiri:ital,wght@0,400;0,700;1,400&family=Manrope:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500&family=Scheherazade+New:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
+    <script>
+      // Применяем тему до рендера, чтобы не было вспышки
+      try {
+        var s = localStorage.getItem('sifat-course/settings');
+        var theme = s ? JSON.parse(s).theme : null;
+        if (theme === 'dark' || (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark');
+        }
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
