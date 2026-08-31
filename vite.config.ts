@@ -10,11 +10,12 @@ export default defineConfig({
     },
   },
   build: {
-    cssCodeSplit: false,
-    assetsInlineLimit: 100_000_000,
     rollupOptions: {
       output: {
-        inlineDynamicImports: true,
+        manualChunks: {
+          react: ['react', 'react-dom', 'react-router-dom'],
+          motion: ['framer-motion'],
+        },
       },
     },
   },
