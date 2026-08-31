@@ -1,0 +1,33 @@
+name: Build Tajweed Site
+
+on:
+  push:
+    branches:
+      - claude/tajweed-sifat-course-hhuzh9
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Package standalone site
+        run: |
+          cd dist
+          zip -r ../tajweed-site-html.zip .
+      - name: Upload site
+        uses: actions/upload-artifact@v4
+        with:
+          name: tajweed-site-html
+          path: tajweed-site-html.zip
+          retention-days: 14
