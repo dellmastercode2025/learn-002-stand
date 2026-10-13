@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Конвертер ТТ → формы СУО</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f4f4f1; --surface: #fcfcfb; --surface-2: #f0efec; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+    --line: #e1e0d9; --line-2: #c3c2b7; --accent: #2a78d6; --accent-ink: #ffffff;
+    --good: #0ca30c; --warn: #fab219; --serious: #ec835a; --critical: #d03b3b; --edit: #fff4cc;
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+    --grid: #e1e0d9; --axis: #c3c2b7;
+    --radius: 10px; --shadow: 0 1px 2px rgba(11,11,11,.06), 0 4px 14px rgba(11,11,11,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #0d0d0d; --surface: #1a1a19; --surface-2: #242423; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+      --line: #2c2c2a; --line-2: #383835; --accent: #3987e5; --edit: #4a3f10;
+      --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+      --grid: #2c2c2a; --axis: #383835;
+      --shadow: 0 1px 2px rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0d0d0d; --surface: #1a1a19; --surface-2: #242423; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --line: #2c2c2a; --line-2: #383835; --accent: #3987e5; --edit: #4a3f10;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+    --grid: #2c2c2a; --axis: #383835;
+    --shadow: 0 1px 2px rgba(0,0,0,.4);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { padding: 0 16px 48px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 650; letter-spacing: -.01em; }
+  h2 { font-size: 16px; margin: 0 0 10px; font-weight: 650; }
+  h3 { font-size: 14px; margin: 18px 0 8px; font-weight: 650; color: var(--ink-2); text-transform: uppercase; letter-spacing: .04em; }
+  p { margin: 6px 0; }
+  a { color: var(--accent); }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 14px 0 10px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+  header .status { margin-left: auto; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; background: var(--surface-2); color: var(--ink-2); font-size: 12px; border: 1px solid var(--line); }
+  .pill.ok { border-color: color-mix(in srgb, var(--good) 50%, var(--line)); }
+  .pill.warn { border-color: color-mix(in srgb, var(--warn) 70%, var(--line)); }
+  .tabs { display: flex; gap: 2px; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+  .tabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 9px 12px; cursor: pointer; color: var(--ink-2); font: inherit; font-weight: 600; }
+  .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+  .tabs button .badge { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 9px; font-size: 11px; line-height: 18px; text-align: center; background: var(--surface-2); color: var(--ink-2); margin-left: 6px; }
+  .tabs button .badge.warn { background: color-mix(in srgb, var(--warn) 35%, var(--surface)); color: var(--ink); }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow); margin-bottom: 14px; }
+  .grid { display: grid; gap: 14px; }
+  .grid.cols-2 { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  .grid.cols-3 { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .row > * { min-width: 0; }
+  label.f { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--ink-2); }
+  label.f > span { font-weight: 600; }
+  input[type="text"], input[type="number"], select, textarea { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--line-2); border-radius: 7px; padding: 6px 9px; min-width: 120px; }
+  input[type="number"] { font-variant-numeric: tabular-nums; }
+  textarea { width: 100%; min-height: 70px; }
+  button.btn { font: inherit; font-weight: 600; border-radius: 8px; border: 1px solid var(--line-2); background: var(--surface); color: var(--ink); padding: 7px 13px; cursor: pointer; }
+  button.btn:hover { background: var(--surface-2); }
+  button.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  button.btn.primary:hover { filter: brightness(1.08); }
+  button.btn.danger { color: var(--critical); }
+  button.btn:disabled { opacity: .5; cursor: default; }
+  .drop { border: 2px dashed var(--line-2); border-radius: var(--radius); padding: 26px; text-align: center; color: var(--ink-2); background: var(--surface); cursor: pointer; transition: border-color .15s; }
+  .drop.over { border-color: var(--accent); }
+  .drop input { display: none; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+  .kpi { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+  .kpi .l { font-size: 12px; color: var(--ink-2); font-weight: 600; }
+  .kpi .v { font-size: 22px; font-weight: 650; margin-top: 2px; letter-spacing: -.01em; }
+  .kpi .d { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .kpi .d.up { color: var(--good); } .kpi .d.down { color: var(--critical); }
+  table.t { border-collapse: collapse; width: 100%; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  table.t th, table.t td { border-bottom: 1px solid var(--line); padding: 4px 7px; text-align: right; white-space: nowrap; }
+  table.t th { background: var(--surface-2); color: var(--ink-2); font-weight: 600; position: sticky; top: 0; z-index: 1; }
+  table.t th:first-child, table.t td:first-child { text-align: left; white-space: normal; min-width: 220px; }
+  table.t tr.group td { font-weight: 650; background: var(--surface-2); }
+  table.t.compact th:first-child, table.t.compact td:first-child { min-width: 140px; }
+  table.t.compact td { white-space: normal; }
+  table.t tr.total td { font-weight: 650; border-top: 2px solid var(--line-2); }
+  table.t td.num { cursor: text; }
+  table.t td.num[contenteditable="true"]:focus { outline: 2px solid var(--accent); background: var(--surface); }
+  table.t td.edited { background: var(--edit); }
+  table.t td.neg { color: var(--critical); }
+  table.t td.diff-ok { color: var(--good); } table.t td.diff-bad { color: var(--critical); font-weight: 600; }
+  .tablewrap { overflow: auto; max-height: 70vh; border: 1px solid var(--line); border-radius: 8px; }
+  .legend { font-size: 12px; color: var(--ink-2); margin: 6px 0; }
+  .legend .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 4px; }
+  .log { list-style: none; padding: 0; margin: 0; font-size: 12.5px; }
+  .log li { padding: 5px 8px; border-left: 3px solid var(--line-2); margin-bottom: 4px; background: var(--surface-2); border-radius: 0 6px 6px 0; }
+  .log li.warn { border-left-color: var(--serious); }
+  .log li.note { border-left-color: var(--warn); }
+  .log li.info { border-left-color: var(--line-2); }
+  .log li.error { border-left-color: var(--critical); }
+  .log li b { font-weight: 650; margin-right: 6px; }
+  .chart { position: relative; height: 300px; }
+  .chart canvas { width: 100% !important; }
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 10px; box-shadow: var(--shadow); z-index: 50; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; }
+  .toast.show { opacity: 1; }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--line-2); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  details summary { cursor: pointer; font-weight: 600; color: var(--ink-2); }
+  .hint { font-size: 12px; color: var(--muted); }
+  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; counter-reset: s; }
+  .steps div { background: var(--surface-2); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+  .steps div::before { counter-increment: s; content: counter(s); display: inline-block; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); text-align: center; line-height: 20px; font-size: 12px; font-weight: 700; margin-right: 8px; }
+  .nowrap { white-space: nowrap; }
+  .right { text-align: right; }
+  .warnbox { border-left: 3px solid var(--serious); background: var(--surface-2); padding: 8px 12px; border-radius: 0 8px 8px 0; margin: 8px 0; font-size: 13px; }
+  .okbox { border-left: 3px solid var(--good); background: var(--surface-2); padding: 8px 12px; border-radius: 0 8px 8px 0; margin: 8px 0; font-size: 13px; }
+  @media (max-width: 640px) { body { padding: 0 12px 32px; } .kpi .v { font-size: 18px; } }
+  @media print { .tabs, header .status, .drop, button { display: none !important; } .panel { display: block !important; } }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Конвертер ТТ → формы СУО</h1>
+    <div class="muted small">Формы ввода 2R (страновой риск), R3 (валютный риск), 4R (процентные разрывы) из трансформационной таблицы</div>
+  </div>
+  <div class="status" id="status"></div>
+</header>
+
+<nav class="tabs" role="tablist" id="tabs">
+  <button role="tab" data-tab="load" aria-selected="true">Загрузка</button>
+  <button role="tab" data-tab="r3">R3 Валютный риск</button>
+  <button role="tab" data-tab="r2">2R Страновой риск</button>
+  <button role="tab" data-tab="r4">4R Процентный разрыв</button>
+  <button role="tab" data-tab="check">Контроль <span class="badge" id="badge-check">0</span></button>
+  <button role="tab" data-tab="analytics">Аналитика</button>
+  <button role="tab" data-tab="history">История <span class="badge" id="badge-history">0</span></button>
+  <button role="tab" data-tab="settings">Настройки</button>
+</nav>
+
+<!-- ============ Загрузка ============ -->
+<section class="panel active" id="panel-load">
+  <div class="card">
+    <div class="steps">
+      <div>Загрузите файл ТТ (xlsm/xlsx) — консолидированную трансформационную таблицу за отчётный период.</div>
+      <div>Проверьте период, компанию, курс USD/KZT и итоги контроля (вкладка «Контроль»).</div>
+      <div>При необходимости поправьте ячейки прямо в предпросмотре форм R3 / 2R / 4R.</div>
+      <div>Сохраните период в историю и скачайте заполненную форму СУО в Excel.</div>
+    </div>
+  </div>
+  <div class="grid cols-2">
+    <div class="card">
+      <h2>Файл трансформационной таблицы</h2>
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept=".xlsm,.xlsx">
+        <div id="dropText"><strong>Перетащите файл ТТ сюда</strong> или нажмите, чтобы выбрать<br><span class="hint">Используется лист «TT» (консолидированная колонка «Итого»)</span></div>
+      </label>
+      <div id="fileInfo" class="small muted" style="margin-top:8px"></div>
+    </div>
+    <div class="card">
+      <h2>Параметры отчёта</h2>
+      <div class="row">
+        <label class="f"><span>Отчётный период</span><input type="text" id="period" placeholder="Q3 2026" style="width:120px"></label>
+        <label class="f"><span>Компания</span><input type="text" id="company" style="width:280px"></label>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="f"><span>Курс USD/KZT на отчётную дату</span><input type="number" id="usdRate" step="0.01" min="0" placeholder="напр. 520.5" style="width:150px"></label>
+        <label class="f"><span>Предыдущий период (из истории)</span><select id="prevSel"><option value="">— нет —</option></select></label>
+      </div>
+      <p class="hint" style="margin-top:8px">Курс нужен для проверки порога 1 млн долл. США по форме R3 и для аналитики. Единицы измерения: тыс. тенге (как в ТТ и формах).</p>
+      <div class="row" style="margin-top:12px">
+        <button class="btn primary" id="btnExport" disabled>Скачать форму СУО (Excel)</button>
+        <button class="btn" id="btnSave" disabled>Сохранить период в историю</button>
+        <button class="btn" id="btnRecalc" disabled>Пересчитать из ТТ</button>
+      </div>
+    </div>
+  </div>
+  <div class="card" id="summaryCard" style="display:none">
+    <h2>Сводка по загруженному периоду</h2>
+    <div class="kpis" id="kpisLoad"></div>
+  </div>
+</section>
+
+<!-- ============ R3 ============ -->
+<section class="panel" id="panel-r3">
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <div><h2 style="margin:0">Форма R3 — отчёт о величине валютного риска</h2><div class="hint">тыс. тенге по курсу бухгалтерского учёта. Ячейки со значениями можно редактировать; правки подсвечены и попадают в выгрузку.</div></div>
+      <div class="row"><button class="btn" id="btnResetR3">Сбросить правки R3</button></div>
+    </div>
+    <div id="r3Threshold"></div>
+    <div class="tablewrap" style="margin-top:10px"><table class="t" id="r3Table"></table></div>
+  </div>
+</section>
+
+<!-- ============ 2R ============ -->
+<section class="panel" id="panel-r2">
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <div><h2 style="margin:0">Форма 2R — страновой риск</h2><div class="hint">Активы и условные обязательства по стране налоговой регистрации контрагента, тыс. тенге. Страновой лимит и рейтинг задаются в настройках.</div></div>
+      <div class="row">
+        <select id="r2AddSel"><option value="">+ добавить страну…</option></select>
+        <button class="btn" id="btnResetR2">Сбросить правки 2R</button>
+      </div>
+    </div>
+    <div class="tablewrap" style="margin-top:10px"><table class="t" id="r2Table"></table></div>
+    <details style="margin-top:10px"><summary>Разнесение денежных средств и вкладов по банкам</summary><div class="tablewrap" style="margin-top:8px"><table class="t" id="r2Banks"></table></div></details>
+    <details style="margin-top:10px"><summary>Выручка по странам (база для распределения торговой ДЗ)</summary><div class="tablewrap" style="margin-top:8px"><table class="t" id="r2Revenue"></table></div></details>
+  </div>
+</section>
+
+<!-- ============ 4R ============ -->
+<section class="panel" id="panel-r4">
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <div><h2 style="margin:0">Форма 4R — процентные разрывы в разрезе валют</h2><div class="hint">В форму попадают только инструменты, чувствительные к изменению ставок (плавающая ставка). Коэффициенты чувствительности по категориям — в настройках.</div></div>
+      <div class="row"><button class="btn" id="btnResetR4">Сбросить правки 4R</button></div>
+    </div>
+    <div id="r4Threshold"></div>
+    <div class="tablewrap" style="margin-top:10px"><table class="t" id="r4Table"></table></div>
+    <details style="margin-top:10px"><summary>Валовые суммы по срокам до применения коэффициентов чувствительности</summary><div class="tablewrap" style="margin-top:8px"><table class="t" id="r4Gross"></table></div></details>
+  </div>
+</section>
+
+<!-- ============ Контроль ============ -->
+<section class="panel" id="panel-check">
+  <div class="card">
+    <h2>Сверка формы R3 с балансом ТТ</h2>
+    <div class="tablewrap"><table class="t" id="checkTable"></table></div>
+  </div>
+  <div class="card">
+    <h2>Журнал преобразования</h2>
+    <div class="hint">«warn» — расхождения, требующие внимания; «note» — допущения маппинга (суммы без валютного/странового разреза); «info» — справочно.</div>
+    <ul class="log" id="log"></ul>
+  </div>
+</section>
+
+<!-- ============ Аналитика ============ -->
+<section class="panel" id="panel-analytics">
+  <div class="card">
+    <h2>Ключевые показатели</h2>
+    <div class="kpis" id="kpis"></div>
+  </div>
+  <div class="grid cols-2">
+    <div class="card"><h2>Чистая валютная позиция по валютам, динамика</h2><div class="hint">тыс. тенге; по сохранённым периодам и текущему</div><div class="chart"><canvas id="chNfp"></canvas></div></div>
+    <div class="card"><h2>Активы и обязательства по валютам, текущий период</h2><div class="hint">тыс. тенге, без тенге</div><div class="chart"><canvas id="chStruct"></canvas></div></div>
+    <div class="card"><h2>Страновой риск: крупнейшие позиции</h2><div class="hint">итого по стране, тыс. тенге</div><div class="chart"><canvas id="chCountry"></canvas></div></div>
+    <div class="card"><h2>Процентный разрыв по временным интервалам</h2><div class="hint">чувствительные активы минус обязательства, тыс. тенге</div><div class="chart"><canvas id="chGap"></canvas></div></div>
+  </div>
+  <div class="card">
+    <h2>Изменения к предыдущему периоду</h2>
+    <div id="deltaInfo" class="hint"></div>
+    <div class="tablewrap"><table class="t" id="deltaTable"></table></div>
+  </div>
+  <div class="card">
+    <h2>Автоматические комментарии к отчёту</h2>
+    <div class="hint">Эти тексты попадают в графу «Комментарии» форм. Их можно отредактировать перед выгрузкой.</div>
+    <label class="f" style="margin-top:8px"><span>R3 — активы</span><textarea id="cmtAssets"></textarea></label>
+    <label class="f" style="margin-top:8px"><span>R3 — обязательства</span><textarea id="cmtLiab"></textarea></label>
+    <label class="f" style="margin-top:8px"><span>R3 — чистая валютная позиция</span><textarea id="cmtNfp"></textarea></label>
+    <label class="f" style="margin-top:8px"><span>4R — комментарий</span><textarea id="cmtR4"></textarea></label>
+  </div>
+</section>
+
+<!-- ============ История ============ -->
+<section class="panel" id="panel-history">
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <div><h2 style="margin:0">Сохранённые периоды</h2><div class="hint">Хранятся в браузере (localStorage). Для переноса на другой компьютер используйте экспорт/импорт JSON.</div></div>
+      <div class="row">
+        <button class="btn" id="btnExportHist">Экспорт истории (JSON)</button>
+        <label class="btn" for="histImport" style="display:inline-block">Импорт истории (JSON)</label><input type="file" id="histImport" accept=".json" style="display:none">
+      </div>
+    </div>
+    <div class="tablewrap" style="margin-top:10px"><table class="t" id="histTable"></table></div>
+  </div>
+</section>
+
+<!-- ============ Настройки ============ -->
+<section class="panel" id="panel-settings">
+  <div class="grid cols-2">
+    <div class="card">
+      <h2>Общие</h2>
+      <div class="row">
+        <label class="f"><span>Колонка ТТ для сумм</span><select id="sUseColumn"><option value="total">Итого (консолидированные данные)</option><option value="pkg">Package sum (до корректировок консолидации)</option></select></label>
+        <label class="f"><span>Страна по умолчанию (2R)</span><input type="text" id="sDefaultCountry" value="КАЗАХСТАН"></label>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="f"><span>Торговая ДЗ и авансы в 2R</span><select id="sRecByRevenue"><option value="1">распределять по странам пропорционально выручке</option><option value="0">относить на страну по умолчанию</option></select></label>
+        <label class="f"><span>Валюта обязательств по аренде (4R)</span><select id="sLeaseCur"><option value="KZT">Тенге</option><option value="USD">Доллар США</option><option value="OTHER">Прочие валюты</option></select></label>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="f"><span>R3: при ОВП ≤ 1 млн USD</span><select id="sBlankR3"><option value="1">выгружать пустографку с причиной</option><option value="0">заполнять суммы всё равно</option></select></label>
+        <label class="f"><span>4R: при доле чувствительных &lt; 5%</span><select id="sBlankR4"><option value="1">выгружать пустографку с причиной</option><option value="0">заполнять суммы всё равно</option></select></label>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="f"><span>Внутреннее нормативное значение ОВП/СК (R3, строка 61)</span><input type="text" id="sNormLimit" placeholder="например: не более 50% СК" style="width:280px"></label>
+      </div>
+      <h3>Подписи</h3>
+      <div class="row">
+        <label class="f"><span>Должность руководителя</span><input type="text" id="sHeadPos"></label>
+        <label class="f"><span>ФИО руководителя</span><input type="text" id="sHeadName"></label>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="f"><span>Должность исполнителя</span><input type="text" id="sExecPos"></label>
+        <label class="f"><span>ФИО исполнителя</span><input type="text" id="sExecName"></label>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Коэффициенты чувствительности к процентной ставке (4R)</h2>
+      <div class="hint">Доля позиции (0–1), относимая к чувствительным инструментам. «auto» для займов полученных — доля займов с плавающей ставкой по ТТ.</div>
+      <div class="tablewrap" style="margin-top:8px"><table class="t compact" id="sensTable"></table></div>
+    </div>
+    <div class="card">
+      <h2>Справочник банков → страна (2R)</h2>
+      <div class="hint">Для банков без страны в названии. Названия — как в ТТ. Пустое значение — автоопределение.</div>
+      <div class="tablewrap" style="margin-top:8px"><table class="t compact" id="bankTable"></table></div>
+      <div class="row" style="margin-top:8px"><input type="text" id="bankNew" placeholder="Название банка как в ТТ" style="flex:1"><select id="bankNewCountry"></select><button class="btn" id="bankAdd">Добавить</button></div>
+    </div>
+    <div class="card">
+      <h2>Страновые лимиты и рейтинги (2R, графы 10 и «Рейтинг страны»)</h2>
+      <div class="hint">Лимит в тыс. тенге по СТП КМТФ.033/.034 (потолок — 50% собственного капитала). Заполняется вручную по реестру лимитов.</div>
+      <div class="tablewrap" style="margin-top:8px"><table class="t compact" id="limitTable"></table></div>
+      <div class="row" style="margin-top:8px"><select id="limitNewCountry"></select><input type="number" id="limitNew" placeholder="Лимит, тыс. тенге" style="width:160px"><input type="text" id="ratingNew" placeholder="Рейтинг (S&amp;P/Moody's/Fitch)" style="width:200px"><button class="btn" id="limitAdd">Добавить</button></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="row">
+      <button class="btn" id="btnSettingsReset">Сбросить настройки</button>
+      <button class="btn danger" id="btnWipe">Очистить всю историю</button>
+      <button class="btn" id="btnTheme">Переключить тему</button>
+    </div>
+  </div>
+</section>
+
+<div class="toast" id="toast"></div>
+
+<script src="vendor/exceljs.min.js"></script>
+<script src="vendor/chart.umd.js"></script>
+<script src="js/template.js"></script>
+<script src="js/mapping.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

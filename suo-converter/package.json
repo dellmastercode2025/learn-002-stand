@@ -1,0 +1,12 @@
+{
+  "name": "suo-converter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Конвертер трансформационной таблицы (ТТ) в формы СУО 2R/R3/4R",
+  "scripts": {
+    "smoke": "node tests/smoke.js"
+  },
+  "devDependencies": {
+    "exceljs": "^4.4.0"
+  }
+}
