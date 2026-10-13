@@ -7,7 +7,7 @@
   const LS_SET = 'suo.settings.v1', LS_HIST = 'suo.history.v1';
 
   const DEFAULT_SETTINGS = {
-    useColumn: 'total', defaultCountry: 'КАЗАХСТАН', receivablesByRevenue: true, leaseCurrency: 'KZT',
+    useColumn: 'total', defaultCountry: 'КАЗАХСТАН', receivablesByRevenue: false, leaseCurrency: 'KZT', _v: 2,
     blankR3: true, blankR4: true, normLimit: '', usdRate: '', company: '',
     sens: Object.assign({}, S.DEFAULT_SENS), bankCountry: {}, countryLimits: {}, countryRatings: {},
     headPos: '', headName: '', execPos: '', execName: '', theme: '',
@@ -15,6 +15,7 @@
 
   let settings = loadJSON(LS_SET, null) || clone(DEFAULT_SETTINGS);
   settings = Object.assign(clone(DEFAULT_SETTINGS), settings, { sens: Object.assign({}, S.DEFAULT_SENS, (settings && settings.sens) || {}) });
+  if (settings._v !== 2) { settings.receivablesByRevenue = false; settings._v = 2; } // миграция: прокси-распределение ДЗ по выручке больше не включено по умолчанию
   let history = loadJSON(LS_HIST, null) || { periods: {} };
   const state = { tt: null, fileName: '', result: null, period: null, prevKey: '', overrides: { r3: {}, r2: {}, r4: {} }, comments: { assets: '', liab: '', nfp: '', r4: '' }, commentsEdited: {}, templateCountries: [], charts: {} };
 
@@ -157,7 +158,7 @@
     return {
       key: periodKey(state.period), label: state.period, sortKey: periodSort(state.period), savedAt: new Date().toISOString(), file: state.fileName, company: $('company').value.trim(), usdRate: usd,
       r3: { lines: Object.fromEntries(Object.entries(eff.r3.lines).map(([r, l]) => [r, { cur: l.cur, total: l.total }])), equity: eff.r3.equity, bs: eff.r3.bs, nfp: eff.r3.totals.nfp.cur, assets: eff.r3.totals.assets.total, liabilities: eff.r3.totals.liabilities.total },
-      r2: { countries: eff.r2.countries },
+      r2: { countries: eff.r2.countries, proxy: !!state.result.r2.proxy },
       r4: { cells: eff.r4.cells, share: eff.r4.share, blank: eff.r4.blank, equity: eff.r4.equity, factors: state.result.r4.factors, reason: state.result.r4.reason, gap: eff.r4.totals.gap },
       comments: currentComments(eff), log: state.result.log, overrides: clone(state.overrides),
     };
@@ -175,12 +176,13 @@
     if ($('panel-analytics').classList.contains('active')) renderAnalytics();
   }
 
-  function numCell(v, opts) { const o = opts || {}; const cls = ['num']; if (v < 0) cls.push('neg'); if (o.edited) cls.push('edited'); return `<td class="${cls.join(' ')}" ${o.edit ? `contenteditable="true" data-form="${o.form}" data-key="${esc(o.key)}"` : ''} title="${o.title ? esc(o.title) : ''}">${v === 0 && !o.edit ? '' : fmt(v)}</td>`; }
+  function numCell(v, opts) { const o = opts || {}; const cls = ['num']; if (v < 0) cls.push('neg'); if (o.edited) cls.push('edited'); return `<td class="${cls.join(' ')}" ${o.edit ? `contenteditable="true" data-form="${o.form}" data-key="${esc(o.key)}" data-val="${Number(v) || 0}"` : ''} title="${o.title ? esc(o.title) : (o.edit ? 'Точное значение: ' + (Number(v) || 0) : '')}">${v === 0 && !o.edit ? '' : fmt(v)}</td>`; }
   function bindEdits(table, onEdit) {
     table.querySelectorAll('td[contenteditable]').forEach(td => {
-      td.addEventListener('focus', () => { td.dataset.orig = td.textContent; td.textContent = td.textContent.replace(/\u00a0/g, ''); try { const r = document.createRange(); r.selectNodeContents(td); const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r); } catch (e) { /* ignore */ } });
-      td.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); td.blur(); } if (e.key === 'Escape') { td.textContent = td.dataset.orig || ''; td.blur(); } });
-      td.addEventListener('blur', () => onEdit(td.dataset.key, parseNum(td.textContent)));
+      td.addEventListener('focus', () => { td.dataset.orig = td.textContent; td.textContent = String(Number(td.dataset.val) || 0); td.dataset.editing = td.textContent; try { const r = document.createRange(); r.selectNodeContents(td); const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r); } catch (e) { /* ignore */ } });
+      td.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); td.blur(); } if (e.key === 'Escape') { td.textContent = td.dataset.editing || ''; td.blur(); } });
+      // Сохраняем только фактически изменённый ввод: выход из ячейки без правки не меняет значение (и не округляет его)
+      td.addEventListener('blur', () => { const raw = td.textContent.trim(); if (raw === td.dataset.editing) { td.textContent = td.dataset.orig || ''; return; } const v = parseNum(raw); if (Math.abs(v - (Number(td.dataset.val) || 0)) < 1e-9) { td.textContent = td.dataset.orig || ''; return; } onEdit(td.dataset.key, v); });
     });
   }
 
@@ -240,6 +242,7 @@
     h += `<tr class="total"><td>Общий результат</td>${S.R2_COLS.map(c => numCell(names.reduce((s, n) => s + (eff.r2.countries[n][c] || 0), 0))).join('')}${numCell(grand)}<td>100%</td><td></td><td></td><td></td>${prev ? '<td></td><td></td>' : ''}</tr>`;
     const kzShare = grand ? pct((eff.r2.countries['КАЗАХСТАН'] || { J: 0 }).J, grand) : 0;
     h += `<tr><td colspan="${S.R2_COLS.length + 6 + (prev ? 2 : 0)}" class="hint" style="text-align:left;white-space:normal">Собственный капитал ${fmt(eq)} тыс. тенге; потолок странового лимита (50% СК по СТП КМТФ.033/.034) — ${fmt(ceiling)} тыс. тенге. Доля Казахстана ${kzShare.toFixed(1)}%, зарубежные страны ${(100 - kzShare).toFixed(1)}%.</td></tr></tbody>`;
+    if (res.r2.proxy) h = `<tr><td colspan="${S.R2_COLS.length + 6 + (prev ? 2 : 0)}" class="warnbox" style="text-align:left;white-space:normal">Графа «Торговая ДЗ / авансы выданные» распределена по странам <b>оценочно</b> пропорционально выручке по странам (включено в настройках). Это не фактические остатки по странам налоговой регистрации контрагентов — перед отправкой замените данными учёта по контрагентам.</td></tr>` + h;
     const tbl = $('r2Table'); tbl.innerHTML = h;
     bindEdits(tbl, (key, v) => { const [n, c] = key.split('|'); const base = res.r2.countries[n] ? (res.r2.countries[n][c] || 0) : 0; if (Math.abs(v - base) < 0.005 && res.r2.countries[n]) delete state.overrides.r2[key]; else state.overrides.r2[key] = v; renderR2(); renderComments(); });
     // банки
@@ -259,6 +262,7 @@
     $('r4Threshold').innerHTML = eff.r4.blank
       ? `<div class="warnbox">Доля чувствительных активов и обязательств ${(eff.r4.share * 100).toFixed(2)}% от суммы активов и обязательств (порог 5%) — по инструкции высылается пустографка с причиной${settings.blankR4 ? ' (режим выгрузки: пустографка)' : ' (режим выгрузки: заполнять суммы)'}. Доля займов с плавающей ставкой по ТТ: ${(r4.floatShareLoans * 100).toFixed(1)}%.</div>`
       : `<div class="okbox">Доля чувствительных активов и обязательств ${(eff.r4.share * 100).toFixed(2)}% ≥ 5% — форма заполняется.</div>`;
+    if (r4.excluded && r4.excluded.length) $('r4Threshold').innerHTML += `<div class="warnbox">Допущение о виде ставки: ${esc(r4.excluded.join('; '))} учтены как инструменты с фиксированной ставкой. Если бы все они имели плавающую ставку, доля чувствительных составила бы <b>${(r4.shareIfAll * 100).toFixed(2)}%</b>. Подтвердите вид ставки, остаток основного долга и даты пересмотра по договорам; коэффициенты — в настройках.</div>`;
     const B = S.R4_BUCKETS;
     let h = `<thead><tr><th>Показатели</th>${B.map(b => `<th>${S.R4_BUCKET_LABEL[b]}</th>`).join('')}<th>Итого</th><th>Прошлый период</th><th>Разница</th><th>Коэфф.</th></tr></thead><tbody>`;
     const sumB = (o) => B.reduce((s, b) => s + (o[b] || 0), 0);
@@ -293,7 +297,9 @@
     const t = eff.r3.totals;
     h += `<tr class="total"><td>Итого активы</td>${numCell(t.assets.total)}${numCell(res.r3.bs.assets)}${numCell(t.assets.total - res.r3.bs.assets)}<td class="${Math.abs(t.assets.total - res.r3.bs.assets) <= 1 ? 'diff-ok' : 'diff-bad'}">${Math.abs(t.assets.total - res.r3.bs.assets) <= 1 ? '✓' : 'расхождение'}</td></tr>`;
     h += `<tr class="total"><td>Итого обязательства</td>${numCell(t.liabilities.total)}${numCell(res.r3.bs.liabilities)}${numCell(t.liabilities.total - res.r3.bs.liabilities)}<td class="${Math.abs(t.liabilities.total - res.r3.bs.liabilities) <= 1 ? 'diff-ok' : 'diff-bad'}">${Math.abs(t.liabilities.total - res.r3.bs.liabilities) <= 1 ? '✓' : 'расхождение'}</td></tr>`;
-    h += `<tr class="total"><td>Собственный капитал (ТТ)</td><td></td>${numCell(res.r3.bs.equity)}<td></td><td></td></tr></tbody>`;
+    h += `<tr class="total"><td>Собственный капитал (ТТ)</td><td></td>${numCell(res.r3.bs.equity)}<td></td><td></td></tr>`;
+    const chk = res.r3.bs.check || 0;
+    h += `<tr class="total"><td>Контроль исходной ТТ: активы − обязательства − капитал</td><td></td><td></td>${numCell(chk)}<td class="${Math.abs(chk) <= 0.005 ? 'diff-ok' : 'diff-bad'}">${Math.abs(chk) <= 0.005 ? '✓' : 'расхождение в ТТ ' + chk.toFixed(2)}</td></tr></tbody>`;
     $('checkTable').innerHTML = h;
     const warns = res.log.filter(l => l.level === 'warn').length;
     const badge = $('badge-check'); badge.textContent = warns; badge.classList.toggle('warn', warns > 0);
@@ -338,6 +344,7 @@
     let r4 = eff.r4.blank
       ? `Форма 4R не заполняется: доля активов и обязательств, чувствительных к изменению процентных ставок (с плавающей ставкой), составляет ${(eff.r4.share * 100).toFixed(2)}% от суммы активов и обязательств, что ниже порога 5%. Процентные займы с плавающей ставкой у компании отсутствуют или несущественны.`
       : `Совокупный процентный разрыв в отчётном периоде по всем видам валют составил ${fmt(g.gapTotal)} тыс. тенге и преимущественно сложился за счёт интервала «${gb.length ? S.R4_BUCKET_LABEL[gb[0].b] : '—'}» (${gb.length ? fmt(gb[0].v) : ''} тыс. тенге). Чувствительные активы ${fmt(g.assetsTotal)}, обязательства ${fmt(g.liabilitiesTotal)} тыс. тенге.`;
+    const x4 = state.result && state.result.r4; if (x4 && x4.excluded && x4.excluded.length) r4 += ` Допущение: ${x4.excluded.join('; ')} учтены как инструменты с фиксированной ставкой (вид ставки подлежит подтверждению по договорам); при плавающей ставке по всем этим инструментам доля чувствительных составила бы ${(x4.shareIfAll * 100).toFixed(2)}%.`;
     if (prev && prev.r4 && prev.r4.gap) { const pg = Object.values(prev.r4.gap).reduce((a, b) => a + b, 0); r4 += ` Изменение разрыва к ${prev.label}: ${sign(g.gapTotal - pg)}${fmt(g.gapTotal - pg)} тыс. тенге.`; }
     return { assets, liab, nfp, r4 };
   }
@@ -510,8 +517,10 @@
     'CDEFGHIJKLM'.split('').forEach(col => setF(ws, col + '58', `${col}23-${col}39`));
     if (!blank) { setV(ws, 'L59', rec.r3.equity || 0); setV(ws, 'M59', rec.r3.equity || 0); }
     if (prev) { setV(ws, 'Y59', prev.r3.equity || 0); setV(ws, 'Z59', prev.r3.equity || 0); }
-    'CDEFGHIJKLM'.split('').forEach(col => setF(ws, col + '60', `IF($M$59=0,0,${col}58/$M$59)`));
-    ws.getCell('C60').numFmt = '0.00%'; 'DEFGHIJKLM'.split('').forEach(col => (ws.getCell(col + '60').numFmt = '0.00%'));
+    'CDEFGHIJKLM'.split('').forEach(col => { setF(ws, col + '60', `IF($M$59=0,0,${col}58/$M$59)`); ws.getCell(col + '60').numFmt = '0.00%'; });
+    // Прошлый период: отношение ЧВП/СК и разница в п.п. (AB..AL = текущий − прошлый)
+    const prevCols = 'PQRSTUVWXYZ'.split(''), curCols = 'CDEFGHIJKLM'.split(''), diffCols = ['AB', 'AC', 'AD', 'AE', 'AF', 'AG', 'AH', 'AI', 'AJ', 'AK', 'AL'];
+    prevCols.forEach((col, i) => { setF(ws, col + '60', `IF($Z$59=0,0,${col}58/$Z$59)`); ws.getCell(col + '60').numFmt = '0.00%'; setF(ws, diffCols[i] + '60', `${curCols[i]}60-${col}60`); ws.getCell(diffCols[i] + '60').numFmt = '0.00%'; });
     if (settings.normLimit) setV(ws, 'C61', settings.normLimit);
     const cm = rec.comments || {};
     setV(ws, 'AQ23', blank ? `Пустографка: открытая валютная позиция не превышает эквивалент 1 млн долл. США. ${cm.nfp || ''}`.trim() : (cm.assets || null));
@@ -547,6 +556,7 @@
       if (n) { const lim = parseFloat(settings.countryLimits[n]); setV(ws, 'K' + r, lim || null); setV(ws, 'L' + r, settings.countryRatings[n] || null); setV(ws, 'K' + rd, lim || null); setV(ws, 'L' + rd, settings.countryRatings[n] || null); }
     }
     if (eq) setV(ws, 'D292', `Собственный капитал ${fmt(eq)} тыс. тенге; потолок странового лимита (50% СК) ${fmt(eq * 0.5)} тыс. тенге.`);
+    if (rec.r2.proxy) setV(ws, 'D293', 'ВНИМАНИЕ: торговая дебиторская задолженность и авансы (графа 7) распределены по странам ОЦЕНОЧНО, пропорционально выручке по странам, а не по фактическим остаткам по контрагентам.');
     setSignatures(ws, rec);
   }
 
@@ -560,6 +570,13 @@
       setV(ws, 'J' + row, p == null ? null : p);
     }
     setV(ws, 'I71', blank ? null : (rec.r4.equity || 0)); if (prev) setV(ws, 'J71', prev.r4.equity || 0);
+    // Прошлые разрывы по срокам и валютам (строки 80–82): активы − обязательства прошлого периода
+    const prevRowOf = { KZT: 80, USD: 81, OTHER: 82 };
+    for (const cur of S.R4_CURS) for (const b of S.R4_BUCKETS) {
+      let v = null;
+      if (prev && prev.r4.cells) { v = 0; for (const c of S.R4_CATS) { const pc = prev.r4.cells[c.rows[cur]]; if (pc) v += (c.side === 'A' ? 1 : -1) * (pc[b] || 0); } }
+      setV(ws, S.R4_BUCKET_COL[b] + prevRowOf[cur], v);
+    }
     setV(ws, 'A79', prev ? prev.label.replace(/^Q(\d)\s*(\d{4})$/, '$1Q\n$2Y') : 'пред. период');
     const cm = (rec.comments || {}).r4 || rec.r4.reason || '';
     setV(ws, 'C96', cm); setV(ws, 'L10', blank ? cm : null);

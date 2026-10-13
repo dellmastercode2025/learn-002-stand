@@ -470,6 +470,8 @@
       liabilities: ix.byNameVal(/^Итого обязательства/i),
       equity: ix.byNameVal(/^Итого капитал$/i) || ix.byNameVal(/^Итого капитал/i),
     };
+    bs.check = round2(bs.assets - bs.liabilities - bs.equity);
+    if (Math.abs(bs.check) > 0.005) log.push({ level: Math.abs(bs.check) > 1 ? 'warn' : 'note', form: 'ТТ', msg: `Контроль баланса в исходной ТТ: активы − обязательства − капитал = ${bs.check.toFixed(2)} тыс. тенге (расхождение в самой ТТ, конвертер его не исправляет).` });
     const totals = r3Totals(lines);
     if (Math.abs(totals.assets.total - bs.assets) > 1) log.push({ level: 'warn', form: 'R3', msg: `Итого активы по форме ${fmt(totals.assets.total)} ≠ балансу ТТ ${fmt(bs.assets)} (${fmt(totals.assets.total - bs.assets)}).` });
     if (Math.abs(totals.liabilities.total - bs.liabilities) > 1) log.push({ level: 'warn', form: 'R3', msg: `Итого обязательства по форме ${fmt(totals.liabilities.total)} ≠ балансу ТТ ${fmt(bs.liabilities)} (${fmt(totals.liabilities.total - bs.liabilities)}).` });
@@ -550,14 +552,19 @@
     // Займы выданные → страна по умолчанию
     const loans = ((r3.lines[26] || {}).total || 0) + ((r3.lines[33] || {}).total || 0);
     if (loans) { add(defCountry, 'F', loans, 'Займы выданные (ТТ не содержит разреза по странам)'); log.push({ level: 'note', form: '2R', msg: `Займы выданные ${fmt(loans)} отнесены на «${defCountry}» (в ТТ нет разреза по странам).` }); }
-    // Ценные бумаги / финансовые активы
-    const sec = ((r3.lines[29] || {}).total || 0) + ((r3.lines[36] || {}).total || 0);
-    if (sec) { add(defCountry, 'G', sec, 'Финансовые активы / ценные бумаги (ТТ не содержит разреза по странам)'); log.push({ level: 'note', form: '2R', msg: `Финансовые активы ${fmt(sec)} отнесены на «${defCountry}» (в ТТ нет разреза по странам).` }); }
+    // Ценные бумаги (графа 6): только статьи баланса «финансовые активы / ценные бумаги».
+    // Прочие финансовые активы (дивиденды к получению, задолженность работников, прочая ДЗ) — графа «Прочее».
+    const sec = ix.sumPlain(['ACSUMAC-TTBS-34', 'ACSUMAC-TTBS-35', 'ACSUMAC-TTBS-13', 'ACSUMAC-TTBS-FA']);
+    const finAll = ((r3.lines[29] || {}).total || 0) + ((r3.lines[36] || {}).total || 0);
+    const otherFin = round2(finAll - sec);
+    if (sec) { add(defCountry, 'G', sec, 'Ценные бумаги / финансовые активы (ТТ не содержит разреза по странам)'); log.push({ level: 'note', form: '2R', msg: `Ценные бумаги ${fmt(sec)} отнесены на «${defCountry}» (в ТТ нет разреза по странам).` }); }
+    if (otherFin) { add(defCountry, 'I', otherFin, 'Прочие финансовые активы (дивиденды к получению, задолженность работников, прочая ДЗ)'); log.push({ level: 'note', form: '2R', msg: `Прочие финансовые активы ${fmt(otherFin)} (дивиденды к получению, задолженность работников, прочая ДЗ) отнесены в графу «Прочее» на «${defCountry}» — уточните страну контрагента.` }); }
     // Торговая ДЗ / авансы
     const rec = ((r3.lines[30] || {}).total || 0) + ((r3.lines[37] || {}).total || 0);
     const revenue = [];
+    let proxy = false;
     if (rec) {
-      if (settings.receivablesByRevenue !== false) {
+      if (settings.receivablesByRevenue === true) {
         const rs = ix.rows.filter(x => /^AC=ZZ3001\d{6}$/.test(x.acN) && !x.cur && !x.dc);
         let wsum = 0;
         for (const x of rs) {
@@ -568,23 +575,24 @@
           if (entry.country && x.total > 0) wsum += x.total;
         }
         if (wsum > 0) {
-          for (const e of revenue) if (e.country && e.value > 0) add(e.country, 'H', rec * e.value / wsum, 'Торговая ДЗ/авансы — пропорционально выручке по странам');
+          for (const e of revenue) if (e.country && e.value > 0) add(e.country, 'H', rec * e.value / wsum, 'Торговая ДЗ/авансы — ОЦЕНКА пропорционально выручке по странам');
+          proxy = true;
           const aggr = revenue.filter(e => !e.country && e.value).map(e => `${e.name}: ${fmt(e.value)}`);
-          log.push({ level: 'note', form: '2R', msg: `Торговая ДЗ и авансы ${fmt(rec)} распределены по странам пропорционально выручке по странам из ТТ (прокси-оценка).${aggr.length ? ' Агрегированные строки выручки не использованы: ' + aggr.join('; ') + '.' : ''}` });
+          log.push({ level: 'warn', form: '2R', msg: `Торговая ДЗ и авансы ${fmt(rec)} распределены по странам ОЦЕНОЧНО, пропорционально выручке по странам из ТТ. Это не фактические остатки по странам налоговой регистрации контрагентов — перед отправкой замените данными по контрагентам.${aggr.length ? ' Агрегированные строки выручки не использованы: ' + aggr.join('; ') + '.' : ''}` });
         } else {
           add(defCountry, 'H', rec, 'Торговая ДЗ/авансы (нет данных о выручке по странам)');
           log.push({ level: 'note', form: '2R', msg: `Торговая ДЗ и авансы ${fmt(rec)} отнесены на «${defCountry}» — в ТТ нет выручки по странам.` });
         }
       } else {
-        add(defCountry, 'H', rec, 'Торговая ДЗ/авансы');
-        log.push({ level: 'note', form: '2R', msg: `Торговая ДЗ и авансы ${fmt(rec)} отнесены на «${defCountry}» (распределение по выручке отключено).` });
+        add(defCountry, 'H', rec, 'Торговая ДЗ/авансы (в ТТ нет разреза по странам контрагентов)');
+        log.push({ level: 'warn', form: '2R', msg: `Торговая ДЗ и авансы ${fmt(rec)} отнесены на «${defCountry}»: в ТТ нет остатков по странам налоговой регистрации контрагентов. Распределите по странам вручную в предпросмотре по данным учёта контрагентов.` });
       }
     }
     // Условные обязательства (гарантии/аккредитивы): в ТТ нет номиналов — заполняются вручную
     log.push({ level: 'info', form: '2R', msg: 'Гарантии и аккредитивы (графы 2–3): в ТТ нет номинальных сумм условных обязательств — при наличии заполните вручную в предпросмотре.' });
 
     for (const k in countries) R2_COLS.forEach(c => (countries[k][c] = round2(countries[k][c])));
-    return { countries, banks, revenue, unknownBanks };
+    return { countries, banks, revenue, unknownBanks, proxy };
   }
 
   // ---------------------------------------------------------------------------
@@ -723,11 +731,19 @@
     const share = base ? (sensA + sensL) / base : 0;
     const threshold = 0.05;
     const blank = share < threshold;
-    const reason = blank
+    // Сценарий «все процентные инструменты с плавающей ставкой»: показывает, насколько вывод зависит от допущений о виде ставки
+    // Рассматриваются только процентные инструменты (вклады, займы, ЦБ, ПФИ, аренда, средства Правительства/клиентов); ДЗ/КЗ и прочие — беспроцентные
+    const INTEREST = ['loansGiven', 'deposits', 'derivA', 'finAssets', 'loans', 'clients', 'derivL', 'gov', 'lease'];
+    const icats = R4_CATS.filter(c => INTEREST.indexOf(c.key) >= 0);
+    const grossAll = icats.reduce((s, c) => s + catTotals[c.key].gross, 0) + R4_CATS.filter(c => INTEREST.indexOf(c.key) < 0).reduce((s, c) => s + catTotals[c.key].sensitive, 0);
+    const shareIfAll = base ? grossAll / base : 0;
+    const excluded = icats.filter(c => catTotals[c.key].gross && factors[c.key] < 1).map(c => `${c.name} ${fmt(catTotals[c.key].gross)} (коэфф. ${(factors[c.key] * 100).toFixed(0)}%)`);
+    const assumption = excluded.length ? ` Допущение: ${excluded.join('; ')} учтены как инструменты с фиксированной ставкой — вид ставки, остаток основного долга и даты пересмотра подлежат подтверждению по договорам. Если бы все эти инструменты имели плавающую ставку, доля составила бы ${(shareIfAll * 100).toFixed(2)}%.` : '';
+    const reason = (blank
       ? `Форма 4R не заполняется: доля активов и обязательств, чувствительных к изменению процентных ставок (плавающая ставка), составляет ${(share * 100).toFixed(2)}% от суммы активов и обязательств (${fmt(sensA + sensL)} из ${fmt(base)} тыс. тенге), что ниже порога 5%.`
-      : `Доля чувствительных активов и обязательств ${(share * 100).toFixed(2)}% от суммы активов и обязательств — форма подлежит заполнению.`;
+      : `Доля чувствительных активов и обязательств ${(share * 100).toFixed(2)}% от суммы активов и обязательств — форма подлежит заполнению.`) + assumption;
     log.push({ level: blank ? 'note' : 'info', form: '4R', msg: reason });
-    return { cells, gross, factors, catTotals, liq, equity, sensA, sensL, base, share, blank, reason, floatShareLoans, floatShareSec };
+    return { cells, gross, factors, catTotals, liq, equity, sensA, sensL, base, share, blank, reason, floatShareLoans, floatShareSec, grossAll, shareIfAll, excluded };
   }
 
   /** Итоги 4R по ячейкам (с учётом правок). */
