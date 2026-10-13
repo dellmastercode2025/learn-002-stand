@@ -119,6 +119,9 @@
   .warnbox { border-left: 3px solid var(--serious); background: var(--surface-2); padding: 8px 12px; border-radius: 0 8px 8px 0; margin: 8px 0; font-size: 13px; }
   .okbox { border-left: 3px solid var(--good); background: var(--surface-2); padding: 8px 12px; border-radius: 0 8px 8px 0; margin: 8px 0; font-size: 13px; }
   @media (max-width: 640px) { body { padding: 0 12px 32px; } .kpi .v { font-size: 18px; } }
+  .fatal { background: #fde8e8; color: #7a1414; border: 1px solid #e6a3a3; border-radius: 10px; padding: 12px 16px; margin: 12px 0; font-size: 14px; line-height: 1.5; }
+  .fatal b { display: block; font-size: 15px; margin-bottom: 4px; }
+  .fatal code { background: rgba(0,0,0,.06); padding: 1px 4px; border-radius: 4px; }
   @media print { .tabs, header .status, .drop, button { display: none !important; } .panel { display: block !important; } }
 </style>
 </head>
@@ -337,7 +340,51 @@
   </div>
 </section>
 
+<div id="fatal"></div>
 <div class="toast" id="toast"></div>
+<script>
+/* Самодиагностика: выполняется до загрузки внешних скриптов, не зависит от них. */
+(function () {
+  var box = function () { return document.getElementById('fatal'); };
+  function show(title, lines) {
+    var el = box(); if (!el) return;
+    el.innerHTML = '<div class="fatal"><b>' + title + '</b>' + lines.map(function (l) { return '<div>' + l + '</div>'; }).join('') + '</div>';
+    var h = document.querySelector('header'); if (h && el.parentNode !== h.parentNode) { /* already placed */ }
+    h.parentNode.insertBefore(el, h.nextSibling);
+  }
+  window.addEventListener('error', function (e) {
+    var msg = (e && e.message) ? e.message : 'неизвестная ошибка';
+    if (e && e.filename && /\.js$/.test(e.filename) && !window.SUO_APP) return; // отдельное сообщение ниже
+    show('Ошибка в работе страницы', ['<code>' + msg + '</code>' + (e && e.filename ? ' (' + e.filename.split('/').pop() + ':' + e.lineno + ')' : ''), 'Сообщите этот текст разработчику. Страницу можно перезагрузить (F5).']);
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e && e.reason; var msg = r && r.message ? r.message : String(r);
+    show('Ошибка при обработке файла', ['<code>' + msg + '</code>', 'Проверьте, что загружается файл ТТ в формате .xlsm/.xlsx, и повторите попытку.']);
+  });
+  window.addEventListener('load', function () {
+    var missing = [];
+    if (typeof ExcelJS === 'undefined') missing.push('vendor/exceljs.min.js');
+    if (typeof Chart === 'undefined') missing.push('vendor/chart.umd.js');
+    if (typeof SUO_TEMPLATE_B64 === 'undefined') missing.push('js/template.js');
+    if (typeof SUO === 'undefined') missing.push('js/mapping.js');
+    if (typeof SUO_APP === 'undefined') missing.push('js/app.js');
+    if (missing.length) {
+      show('Страница открыта без вспомогательных файлов — конвертер не будет работать', [
+        'Не загрузились: <code>' + missing.join('</code>, <code>') + '</code>.',
+        'Чаще всего это значит, что <b>index.html открыт прямо из ZIP-архива</b>. Сначала полностью распакуйте архив (правая кнопка → «Извлечь всё…»), затем откройте <code>suo-converter/index.html</code> из распакованной папки. Папки <code>js</code> и <code>vendor</code> должны лежать рядом с index.html.',
+        'Если файлы на месте, а ошибка остаётся — браузер блокирует локальные скрипты: откройте страницу в Chrome, Edge или Firefox и разрешите заблокированное содержимое (жёлтая полоса вверху). Internet Explorer не поддерживается.',
+        'Браузер: <code>' + navigator.userAgent + '</code>'
+      ]);
+      return;
+    }
+    var old = [];
+    if (!window.File || !window.File.prototype || typeof window.File.prototype.arrayBuffer !== 'function') old.push('File.arrayBuffer');
+    if (typeof Object.fromEntries !== 'function') old.push('Object.fromEntries');
+    if (typeof TextDecoder === 'undefined') old.push('TextDecoder');
+    if (old.length) show('Устаревший браузер', ['Нет поддержки: <code>' + old.join('</code>, <code>') + '</code>. Откройте страницу в актуальной версии Chrome, Edge или Firefox.']);
+  });
+})();
+</script>
 
 <script src="vendor/exceljs.min.js"></script>
 <script src="vendor/chart.umd.js"></script>

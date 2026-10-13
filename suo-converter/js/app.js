@@ -57,6 +57,8 @@
   // ---------------------------------------------------------------------------
   // Загрузка файла ТТ
   // ---------------------------------------------------------------------------
+  // Файл, брошенный мимо области загрузки, не должен открываться браузером вместо страницы.
+  ['dragover', 'drop'].forEach(ev => document.addEventListener(ev, (e) => { if (!e.target.closest || !e.target.closest('#drop')) { e.preventDefault(); if (ev === 'drop' && e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); } }));
   const drop = $('drop');
   drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
   drop.addEventListener('dragleave', () => drop.classList.remove('over'));
@@ -66,9 +68,16 @@
   async function loadFile(file) {
     $('dropText').innerHTML = `<span class="spinner"></span> Читаю «${esc(file.name)}» (${(file.size / 1048576).toFixed(1)} МБ)…`;
     try {
-      const buf = await file.arrayBuffer();
+      if (!/\.(xlsm|xlsx)$/i.test(file.name)) throw new Error(`Ожидается файл Excel (.xlsm или .xlsx), получен «${file.name}».`);
+      const buf = await readFileBuffer(file);
+      const head = new Uint8Array(buf, 0, 2);
+      if (head[0] !== 0x50 || head[1] !== 0x4b) throw new Error('Файл не является книгой Excel формата xlsx/xlsm (возможно, это старый формат .xls или файл повреждён). Пересохраните ТТ как .xlsm/.xlsx.');
       const wb = new ExcelJS.Workbook();
-      await wb.xlsx.load(buf);
+      $('dropText').innerHTML = `<span class="spinner"></span> Разбираю книгу «${esc(file.name)}»… (большой файл ТТ может читаться 10–30 секунд)`;
+      await new Promise(r => setTimeout(r, 30));
+      try { await wb.xlsx.load(buf); } catch (e) { throw new Error('Не удалось прочитать книгу Excel: ' + (e && e.message ? e.message : e) + '. Если файл защищён паролем — снимите защиту; если это выгрузка SAP — откройте и пересохраните в Excel.'); }
+      if (!wb.worksheets.length) throw new Error('В книге нет листов.');
+      if (!wb.getWorksheet('TT') && !wb.getWorksheet('audit_TT')) throw new Error(`В файле нет листа «TT» (есть листы: ${wb.worksheets.map(w => w.name).join(', ')}). Нужна консолидированная трансформационная таблица (файл вида T_-KMTF-ГГГГ.ММ_CONSO_1.xlsm).`);
       const tt = S.parseTT(wb, { useColumn: settings.useColumn });
       state.tt = tt; state.fileName = file.name;
       state.overrides = { r3: {}, r2: {}, r4: {} }; state.commentsEdited = {};
@@ -83,9 +92,15 @@
       if (!settings.usdRate) toast('Укажите курс USD/KZT на отчётную дату — он нужен для порога по форме R3', 5000);
     } catch (e) {
       console.error(e);
-      $('dropText').innerHTML = `<strong style="color:var(--critical)">Ошибка:</strong> ${esc(e.message)}`;
-      toast('Ошибка чтения файла: ' + e.message, 6000);
+      const msg = e && e.message ? e.message : String(e);
+      $('dropText').innerHTML = `<strong style="color:var(--critical)">Ошибка:</strong> ${esc(msg)}<br><span class="hint">Нажмите, чтобы выбрать другой файл. Текст ошибки можно скопировать и передать разработчику.</span>`;
+      $('fileInfo').textContent = `Файл: ${file.name}, ${(file.size / 1048576).toFixed(1)} МБ. Браузер: ${navigator.userAgent}`;
+      toast('Ошибка чтения файла: ' + msg, 8000);
     }
+  }
+  function readFileBuffer(file) {
+    if (typeof file.arrayBuffer === 'function') return file.arrayBuffer();
+    return new Promise((resolve, reject) => { const fr = new FileReader(); fr.onload = () => resolve(fr.result); fr.onerror = () => reject(fr.error || new Error('Не удалось прочитать файл')); fr.readAsArrayBuffer(file); });
   }
   function normalizeCompany(s) { if (/казмортрансфлот/i.test(s)) return 'ТОО «НМСК «Казмортрансфлот»'; return s; }
 
