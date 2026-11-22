@@ -1,0 +1,60 @@
+# Desktop sorter: environment check. Read-only, changes nothing on the computer.
+# Paste the whole text into a Windows PowerShell window (not "Run as administrator") and press Enter.
+& {
+'=== 1. PowerShell ==='
+"Version      : $($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition)), build $($PSVersionTable.BuildVersion), CLR $($PSVersionTable.CLRVersion)"
+"LanguageMode : $($ExecutionContext.SessionState.LanguageMode)"
+"Process      : $env:PROCESSOR_ARCHITECTURE, culture $((Get-Culture).Name), UI $((Get-UICulture).Name)"
+try { ".NET release : $((Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full' -ErrorAction Stop).Release)" } catch { '.NET release : n/a' }
+try { "Elevated     : $([bool]((whoami /groups) -match 'S-1-16-12288'))" } catch { 'Elevated     : n/a' }
+'=== 2. Execution policy ==='
+Get-ExecutionPolicy -List | Format-Table -AutoSize | Out-String
+'=== 3. Desktop ==='
+$d = $null
+try { $d = [Environment]::GetFolderPath('DesktopDirectory') } catch { "System call failed: $($_.Exception.Message)" }
+if (-not $d) { try { $d = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders' -ErrorAction Stop).Desktop; 'Source       : registry (fallback)' } catch { } }
+"Path         : $d"
+if ($d) { "Details      : exists=$(Test-Path -LiteralPath $d), UNC=$($d -like '\\*'), OneDrive=$($d -like '*OneDrive*'), length=$($d.Length)" }
+'=== 4. Microsoft Office ==='
+foreach ($a in 'Word', 'Excel', 'Outlook', 'PowerPoint') {
+    $k = "Registry::HKEY_CLASSES_ROOT\$a.Application"
+    if (Test-Path $k) { $v = ''; try { $v = (Get-ItemProperty "$k\CurVer" -ErrorAction Stop).'(default)' } catch { }; "$a : installed $v" } else { "$a : NOT FOUND" }
+}
+'=== 5. api.anthropic.com over HTTPS (system proxy) ==='
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { "TLS 1.2 setup failed: $($_.Exception.Message)" }
+try {
+    $u = [Uri]'https://api.anthropic.com/v1/messages'
+    $wp = [Net.WebRequest]::DefaultWebProxy
+    if ($wp) { $wp.Credentials = [Net.CredentialCache]::DefaultCredentials }
+    if ($wp -and -not $wp.IsBypassed($u)) { 'Route        : through the system proxy' } else { 'Route        : direct, no proxy for this address' }
+} catch { "Proxy setup failed: $($_.Exception.Message)" }
+try {
+    $r = Invoke-WebRequest -Uri 'https://api.anthropic.com/v1/messages' -Method Post -ContentType 'application/json' -Body '{}' -UseBasicParsing -TimeoutSec 30
+    "Result       : HTTP $($r.StatusCode) - unexpected, a request without a key must be rejected"
+} catch {
+    $resp = $_.Exception.Response
+    if ($resp) {
+        "Result       : HTTP $([int]$resp.StatusCode) $($resp.StatusCode)"
+        $b = "$($_.ErrorDetails.Message)" -replace '\s+', ' '
+        if ($b.Length -gt 300) { $b = $b.Substring(0, 300) }
+        "Body         : $b"
+    } else { "Result       : NO HTTP RESPONSE - $($_.Exception.Message)" }
+}
+'=== 6. Python ==='
+$n = 0
+$names = 'python', 'python3', 'py'
+foreach ($c in @(Get-Command -Name $names -CommandType Application -ErrorAction SilentlyContinue)) {
+    $n++
+    try { $o = (& $c.Path --version 2>&1 | ForEach-Object { "$_" }) -join ' '; "$($c.Path) : $o" } catch { "$($c.Path) : cannot run - $($_.Exception.Message)" }
+}
+foreach ($k in 'HKCU:\Software\Python\PythonCore', 'HKLM:\SOFTWARE\Python\PythonCore', 'HKLM:\SOFTWARE\WOW6432Node\Python\PythonCore') {
+    if (Test-Path $k) { foreach ($s in @(Get-ChildItem $k)) { $n++; "Registry     : $($s.Name)" } }
+}
+if ($n -eq 0) { 'Python       : not found' }
+'=== 7. Built-in PDF renderer ==='
+try {
+    $t = [Type]::GetType('Windows.Data.Pdf.PdfDocument, Windows.Data.Pdf, ContentType=WindowsRuntime', $false, $true)
+    if ($t) { 'Windows.Data.Pdf : available' } else { 'Windows.Data.Pdf : not available' }
+} catch { "Windows.Data.Pdf : check failed - $($_.Exception.Message)" }
+} 2>&1 | Out-String -Stream | Tee-Object -Variable chk
+try { Set-Clipboard -Value $chk; '--- Result copied to the clipboard ---' } catch { '--- Select the text above and copy it ---' }
