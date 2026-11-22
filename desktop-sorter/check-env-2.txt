@@ -1,0 +1,52 @@
+# Desktop sorter: follow-up check. Read-only. Paste into the same Windows PowerShell window and press Enter.
+& {
+'=== 1. PowerShell ==='
+"Version      : $($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition)), build $($PSVersionTable.BuildVersion)"
+"LanguageMode : $($ExecutionContext.SessionState.LanguageMode)"
+"Process      : $env:PROCESSOR_ARCHITECTURE, culture $((Get-Culture).Name), UI $((Get-UICulture).Name), list separator '$((Get-Culture).TextInfo.ListSeparator)'"
+try { ".NET release : $((Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full' -ErrorAction Stop).Release)" } catch { '.NET release : n/a' }
+try { "Elevated     : $([bool]((whoami /groups) -match 'S-1-16-12288'))" } catch { 'Elevated     : n/a' }
+'=== 5. api.anthropic.com: who answers ==='
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $req = [Net.WebRequest]::Create('https://api.anthropic.com/v1/messages')
+    $req.Method = 'POST'
+    $req.ContentType = 'application/json'
+    $req.Timeout = 30000
+    $bytes = [Text.Encoding]::UTF8.GetBytes('{}')
+    $st = $req.GetRequestStream()
+    $st.Write($bytes, 0, $bytes.Length)
+    $st.Close()
+    $resp = $null
+    try { $resp = $req.GetResponse() } catch {
+        $e = $_.Exception.GetBaseException()
+        $resp = $e.Response
+        if (-not $resp) { "No HTTP response: $($e.Message)" }
+    }
+    if ($resp) {
+        "Status       : $([int]$resp.StatusCode) $($resp.StatusDescription)"
+        foreach ($h in 'Server', 'request-id', 'Content-Type', 'Content-Length', 'Transfer-Encoding', 'WWW-Authenticate', 'Via') { "$h : $($resp.Headers[$h])" }
+        $rd = New-Object System.IO.StreamReader($resp.GetResponseStream())
+        $body = $rd.ReadToEnd() -replace '\s+', ' '
+        if ($body.Length -gt 300) { $body = $body.Substring(0, 300) }
+        "Body         : $body"
+        $resp.Close()
+    }
+    $sp = [Net.ServicePointManager]::FindServicePoint([Uri]'https://api.anthropic.com/v1/messages')
+    "TLS issuer   : $($sp.Certificate.Issuer)"
+} catch { "Check failed: $($_.Exception.Message)" }
+'=== 8. Desktop: network zone and size ==='
+try {
+    $d = [Environment]::GetFolderPath('DesktopDirectory')
+    "Zone         : $([Security.Policy.Zone]::CreateFromUrl($d).SecurityZone)"
+    'Counting files, this can take a minute...'
+    $files = @(Get-ChildItem -LiteralPath $d -Recurse -File -Force -ErrorAction SilentlyContinue)
+    $sum = ($files | Measure-Object -Property Length -Sum).Sum
+    $root = @($files | Where-Object { $_.DirectoryName -eq $d }).Count
+    $gb = [math]::Round($sum / 1073741824, 2)
+    "Files        : $($files.Count) total, $root in the desktop root, $gb GB"
+    $top = $files | Group-Object { $_.Extension.ToLower() } | Sort-Object Count -Descending | Select-Object -First 12 | ForEach-Object { "$($_.Name)=$($_.Count)" }
+    "Top types    : $($top -join ', ')"
+} catch { "Check failed: $($_.Exception.Message)" }
+} 2>&1 | Out-String -Stream | Tee-Object -Variable chk2; try { Set-Clipboard -Value $chk2; '--- Result copied to the clipboard ---' } catch { '--- Select the text above and copy it ---' }
+# End of the check. If this line is still shown at the prompt, just press Enter.
