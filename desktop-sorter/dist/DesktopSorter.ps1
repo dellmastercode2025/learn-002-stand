@@ -1226,6 +1226,63 @@ function Get-RelAttr($reader) {
     return ''
 }
 
+function ConvertFrom-XmlRaw([string]$xml) {
+    # Быстрое извлечение текста из XML без полного разбора: границы абзацев становятся переводами строк
+    if (-not $xml) { return '' }
+    $t = [regex]::Replace($xml, '</w:p>|<w:br\b[^>]*>|<w:tab\b[^>]*>|</w:tc>|</a:p>', "`n")
+    $t = [regex]::Replace($t, '<[^>]+>', '')
+    return [Net.WebUtility]::HtmlDecode($t)
+}
+
+function Read-ZipEntryText($entry, [long]$maxBytes) {
+    # Читает часть архива целиком как текст UTF-8. Слишком большие части не читаются.
+    if ([long]$entry.Length -gt $maxBytes) { return '' }
+    $st = $entry.Open()
+    try {
+        $ms = New-Object IO.MemoryStream
+        $st.CopyTo($ms)
+        $bytes = $ms.ToArray()
+        $ms.Dispose()
+        return [Text.Encoding]::UTF8.GetString($bytes)
+    } finally { $st.Dispose() }
+}
+
+function Clear-SheetHeaderCodes([string]$t) {
+    # В колонтитулах Excel текст перемежается служебными кодами: &R (справа), &"шрифт", &12 (размер)
+    if (-not $t) { return '' }
+    return [regex]::Replace($t, '&"[^"]*"|&\d+|&[A-Za-z]', ' ')
+}
+
+function Read-OoxmlMargins($zip, [string]$ext) {
+    # Текст колонтитулов Word и Excel. Пометка «Для служебного пользования» часто стоит именно там,
+    # поэтому колонтитулы читаются целиком, а не только начало документа.
+    $sb = New-Object System.Text.StringBuilder
+    try {
+        if ($script:ExtWord -contains $ext) {
+            foreach ($e in $zip.Entries) {
+                if ($sb.Length -gt 6000) { break }
+                if ($e.FullName -match '(?i)^word/(header|footer)\d*\.xml$') {
+                    $t = (ConvertFrom-XmlRaw (Read-ZipEntryText $e 2097152)).Trim()
+                    if ($t) { [void]$sb.Append($t).Append("`n") }
+                }
+            }
+        } elseif ($script:ExtExcel -contains $ext) {
+            $n = 0
+            foreach ($e in $zip.Entries) {
+                if ($e.FullName -notmatch '(?i)^xl/worksheets/sheet\d+\.xml$') { continue }
+                $n++
+                if ($n -gt 5 -or $sb.Length -gt 6000) { break }
+                $xml = Read-ZipEntryText $e 16777216
+                foreach ($m in [regex]::Matches($xml, '(?s)<headerFooter\b[^>]*>(.*?)</headerFooter>')) {
+                    $t = (Clear-SheetHeaderCodes (ConvertFrom-XmlRaw $m.Groups[1].Value)).Trim()
+                    if ($t) { [void]$sb.Append($t).Append("`n") }
+                }
+            }
+        }
+    } catch { }
+    return $sb.ToString()
+}
+
 function Read-DocxText($zip, [int]$max) {
     $part = Get-MainPart $zip 'word/document.xml'
     $e = Get-ZipEntry $zip $part
@@ -1977,7 +2034,18 @@ function Read-WordFile([string]$path, [int]$max) {
         $n = [Math]::Min($max + 300, $end)
         $text = ''
         if ($n -gt 0) { $text = [string]$doc.Range(0, $n).Text }
-        return @{ ok = $true; text = (Clear-ComText $text) }
+        # Колонтитулы первого раздела и надписи в них: там часто стоит пометка «Для служебного пользования»
+        $extra = ''
+        try {
+            $sec = $doc.Sections.Item(1)
+            foreach ($i in 1, 2, 3) {
+                try { $extra += [string]$sec.Headers.Item($i).Range.Text + "`n" } catch { }
+                try { $extra += [string]$sec.Footers.Item($i).Range.Text + "`n" } catch { }
+            }
+            try { foreach ($sh in $sec.Headers.Item(1).Shapes) { try { if ($sh.TextFrame.HasText) { $extra += [string]$sh.TextFrame.TextRange.Text + "`n" } } catch { } } } catch { }
+        } catch { }
+        if ($extra.Length -gt 6000) { $extra = $extra.Substring(0, 6000) }
+        return @{ ok = $true; text = (Clear-ComText $text); extra = (Clear-ComText $extra) }
     } finally {
         if ($doc) {
             try { $doc.Close(0) } catch { }
@@ -2032,7 +2100,17 @@ function Read-ExcelFile([string]$path, [int]$rows, [int]$max) {
                 } elseif ($null -ne $vals) { [void]$sb.Append([string]$vals) }
             }
         }
-        return @{ ok = $true; text = $sb.ToString() }
+        # Колонтитулы первого листа (если принтер недоступен, Excel может их не отдать: тогда пропускаются)
+        $extra = ''
+        try {
+            if ($wb.Worksheets.Count -ge 1) {
+                $ps = $wb.Worksheets.Item(1).PageSetup
+                foreach ($pn in 'LeftHeader', 'CenterHeader', 'RightHeader', 'LeftFooter', 'CenterFooter', 'RightFooter') {
+                    try { $v = [string]$ps.$pn; if ($v) { $extra += $v + "`n" } } catch { }
+                }
+            }
+        } catch { }
+        return @{ ok = $true; text = $sb.ToString(); extra = (Clear-ComText $extra) }
     } finally {
         if ($wb) {
             try { $wb.Close($false) } catch { }
@@ -2227,7 +2305,9 @@ function Read-LegacyOffice([string]$path, [string]$ext, [long]$size) {
         }
         if ($r.ContainsKey('protected') -and $r.protected) { return @{ State = 'protected'; Text = ''; Note = 'защищён паролем' } }
         if (-not $r.ok) { return @{ State = 'corrupt'; Text = ''; Note = ('не открылся в Office: ' + $r.error) } }
-        return @{ State = 'ok'; Text = (Format-Extract ([string]$r.text) $max); Note = '' }
+        $extra = ''
+        if ($r.ContainsKey('extra')) { $extra = [string]$r.extra }
+        return @{ State = 'ok'; Text = (Format-Extract ([string]$r.text) $max); Note = ''; Extra = $extra }
     } finally {
         try { if ([IO.File]::Exists($tmp)) { [IO.File]::Delete($tmp) } } catch { }
     }
@@ -2558,6 +2638,7 @@ function Get-FileContent([string]$full, [string]$name, [string]$ext, [long]$size
     #   Note  - пояснение; Dsp - найденный признак ДСП; Html - сведения об HTML-файле
     $max = Get-OptInt 'ЗнаковТекста'
     $res = @{ State = 'meta'; Kind = 'meta'; Text = ''; Image = $null; MediaType = ''; PdfBytes = $null; Note = ''; Dsp = ''; Html = $null; Pages = 0 }
+    $extra = ''     # текст колонтитулов: нужен для поиска пометки ДСП
     try {
         if ($size -eq 0) { $res.Note = 'пустой файл'; return $res }
 
@@ -2571,6 +2652,7 @@ function Get-FileContent([string]$full, [string]$name, [string]$ext, [long]$size
                 if ($script:ExtWord -contains $ext) { $res.Text = Read-DocxText $zip $max }
                 elseif ($script:ExtExcel -contains $ext) { $res.Text = Read-XlsxText $zip (Get-OptInt 'СтрокExcel') $max }
                 else { $res.Text = Read-PptxText $zip $max }
+                $extra = Read-OoxmlMargins $zip $ext
             } finally { $zip.Dispose() }
             $res.State = 'ok'; $res.Kind = 'text'
         }
@@ -2585,9 +2667,20 @@ function Get-FileContent([string]$full, [string]$name, [string]$ext, [long]$size
                 $r = Read-LegacyOffice $full $ext $size
                 $res.State = $r.State; $res.Note = $r.Note; $res.Text = $r.Text
                 if ($r.State -eq 'ok') { $res.Kind = 'text' }
+                if ($r.ContainsKey('Extra')) {
+                    $extra = [string]$r.Extra
+                    if ($ext -eq '.xls' -or $ext -eq '.xlt') { $extra = Clear-SheetHeaderCodes $extra }
+                }
             }
         }
-        elseif ($ext -eq '.rtf') { $res.Text = Read-RtfText $full $size $max; $res.State = 'ok'; $res.Kind = 'text' }
+        elseif ($ext -eq '.rtf') {
+            $res.Text = Read-RtfText $full $size $max; $res.State = 'ok'; $res.Kind = 'text'
+            # Колонтитулы RTF обычным способом не читаются: дополнительно просматривается начало файла как есть
+            try {
+                $rawRtf = [Text.Encoding]::GetEncoding(28591).GetString((Read-Head $full ([int][Math]::Min($size, 1048576))))
+                $extra = ConvertFrom-RtfSimple $rawRtf 6000
+            } catch { }
+        }
         elseif ($ext -eq '.msg') {
             try { $res.Text = Read-MsgText $full $max; $res.State = 'ok'; $res.Kind = 'text' }
             catch {
@@ -2626,11 +2719,17 @@ function Get-FileContent([string]$full, [string]$name, [string]$ext, [long]$size
         return $res
     }
 
-    # Пометка «Для служебного пользования» в тексте
+    # Пометка «Для служебного пользования» в тексте или в колонтитулах
     $mark = Find-DspMark $res.Text
+    if (-not $mark -and $extra) { $mark = Find-DspMark $extra }
     if ($mark) {
         $res.State = 'dsp'; $res.Dsp = $mark; $res.Kind = 'meta'
         $res.Image = $null; $res.PdfBytes = $null; $res.Text = ''
+    } elseif ($extra -and $res.Kind -eq 'text' -and $ext -ne '.rtf') {
+        # Колонтитулы помогают понять документ (название организации, номер, гриф), поэтому их начало идёт в запрос
+        $short = ($extra -replace '\s+', ' ').Trim()
+        if ($short.Length -gt 300) { $short = $short.Substring(0, 300) }
+        if ($short) { $res.Text = 'Колонтитулы: ' + $short + "`n`n" + $res.Text }
     }
     return $res
 }

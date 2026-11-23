@@ -78,7 +78,18 @@ function Read-WordFile([string]$path, [int]$max) {
         $n = [Math]::Min($max + 300, $end)
         $text = ''
         if ($n -gt 0) { $text = [string]$doc.Range(0, $n).Text }
-        return @{ ok = $true; text = (Clear-ComText $text) }
+        # Колонтитулы первого раздела и надписи в них: там часто стоит пометка «Для служебного пользования»
+        $extra = ''
+        try {
+            $sec = $doc.Sections.Item(1)
+            foreach ($i in 1, 2, 3) {
+                try { $extra += [string]$sec.Headers.Item($i).Range.Text + "`n" } catch { }
+                try { $extra += [string]$sec.Footers.Item($i).Range.Text + "`n" } catch { }
+            }
+            try { foreach ($sh in $sec.Headers.Item(1).Shapes) { try { if ($sh.TextFrame.HasText) { $extra += [string]$sh.TextFrame.TextRange.Text + "`n" } } catch { } } } catch { }
+        } catch { }
+        if ($extra.Length -gt 6000) { $extra = $extra.Substring(0, 6000) }
+        return @{ ok = $true; text = (Clear-ComText $text); extra = (Clear-ComText $extra) }
     } finally {
         if ($doc) {
             try { $doc.Close(0) } catch { }
@@ -133,7 +144,17 @@ function Read-ExcelFile([string]$path, [int]$rows, [int]$max) {
                 } elseif ($null -ne $vals) { [void]$sb.Append([string]$vals) }
             }
         }
-        return @{ ok = $true; text = $sb.ToString() }
+        # Колонтитулы первого листа (если принтер недоступен, Excel может их не отдать: тогда пропускаются)
+        $extra = ''
+        try {
+            if ($wb.Worksheets.Count -ge 1) {
+                $ps = $wb.Worksheets.Item(1).PageSetup
+                foreach ($pn in 'LeftHeader', 'CenterHeader', 'RightHeader', 'LeftFooter', 'CenterFooter', 'RightFooter') {
+                    try { $v = [string]$ps.$pn; if ($v) { $extra += $v + "`n" } } catch { }
+                }
+            }
+        } catch { }
+        return @{ ok = $true; text = $sb.ToString(); extra = (Clear-ComText $extra) }
     } finally {
         if ($wb) {
             try { $wb.Close($false) } catch { }
@@ -328,7 +349,9 @@ function Read-LegacyOffice([string]$path, [string]$ext, [long]$size) {
         }
         if ($r.ContainsKey('protected') -and $r.protected) { return @{ State = 'protected'; Text = ''; Note = 'защищён паролем' } }
         if (-not $r.ok) { return @{ State = 'corrupt'; Text = ''; Note = ('не открылся в Office: ' + $r.error) } }
-        return @{ State = 'ok'; Text = (Format-Extract ([string]$r.text) $max); Note = '' }
+        $extra = ''
+        if ($r.ContainsKey('extra')) { $extra = [string]$r.extra }
+        return @{ State = 'ok'; Text = (Format-Extract ([string]$r.text) $max); Note = ''; Extra = $extra }
     } finally {
         try { if ([IO.File]::Exists($tmp)) { [IO.File]::Delete($tmp) } } catch { }
     }

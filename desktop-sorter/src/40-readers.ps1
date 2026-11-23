@@ -160,6 +160,63 @@ function Get-RelAttr($reader) {
     return ''
 }
 
+function ConvertFrom-XmlRaw([string]$xml) {
+    # Быстрое извлечение текста из XML без полного разбора: границы абзацев становятся переводами строк
+    if (-not $xml) { return '' }
+    $t = [regex]::Replace($xml, '</w:p>|<w:br\b[^>]*>|<w:tab\b[^>]*>|</w:tc>|</a:p>', "`n")
+    $t = [regex]::Replace($t, '<[^>]+>', '')
+    return [Net.WebUtility]::HtmlDecode($t)
+}
+
+function Read-ZipEntryText($entry, [long]$maxBytes) {
+    # Читает часть архива целиком как текст UTF-8. Слишком большие части не читаются.
+    if ([long]$entry.Length -gt $maxBytes) { return '' }
+    $st = $entry.Open()
+    try {
+        $ms = New-Object IO.MemoryStream
+        $st.CopyTo($ms)
+        $bytes = $ms.ToArray()
+        $ms.Dispose()
+        return [Text.Encoding]::UTF8.GetString($bytes)
+    } finally { $st.Dispose() }
+}
+
+function Clear-SheetHeaderCodes([string]$t) {
+    # В колонтитулах Excel текст перемежается служебными кодами: &R (справа), &"шрифт", &12 (размер)
+    if (-not $t) { return '' }
+    return [regex]::Replace($t, '&"[^"]*"|&\d+|&[A-Za-z]', ' ')
+}
+
+function Read-OoxmlMargins($zip, [string]$ext) {
+    # Текст колонтитулов Word и Excel. Пометка «Для служебного пользования» часто стоит именно там,
+    # поэтому колонтитулы читаются целиком, а не только начало документа.
+    $sb = New-Object System.Text.StringBuilder
+    try {
+        if ($script:ExtWord -contains $ext) {
+            foreach ($e in $zip.Entries) {
+                if ($sb.Length -gt 6000) { break }
+                if ($e.FullName -match '(?i)^word/(header|footer)\d*\.xml$') {
+                    $t = (ConvertFrom-XmlRaw (Read-ZipEntryText $e 2097152)).Trim()
+                    if ($t) { [void]$sb.Append($t).Append("`n") }
+                }
+            }
+        } elseif ($script:ExtExcel -contains $ext) {
+            $n = 0
+            foreach ($e in $zip.Entries) {
+                if ($e.FullName -notmatch '(?i)^xl/worksheets/sheet\d+\.xml$') { continue }
+                $n++
+                if ($n -gt 5 -or $sb.Length -gt 6000) { break }
+                $xml = Read-ZipEntryText $e 16777216
+                foreach ($m in [regex]::Matches($xml, '(?s)<headerFooter\b[^>]*>(.*?)</headerFooter>')) {
+                    $t = (Clear-SheetHeaderCodes (ConvertFrom-XmlRaw $m.Groups[1].Value)).Trim()
+                    if ($t) { [void]$sb.Append($t).Append("`n") }
+                }
+            }
+        }
+    } catch { }
+    return $sb.ToString()
+}
+
 function Read-DocxText($zip, [int]$max) {
     $part = Get-MainPart $zip 'word/document.xml'
     $e = Get-ZipEntry $zip $part
