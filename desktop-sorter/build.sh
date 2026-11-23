@@ -28,4 +28,20 @@ if [ -f src/Start.bat ]; then
     echo "ОШИБКА: в Start.bat есть не-латинские символы" >&2; exit 1
   fi
 fi
-echo "Собрано: $(ls dist | tr '\n' ' ')"
+# Инструкция на одну страницу (нужны node и пакет docx)
+if command -v node >/dev/null 2>&1 && node -e "require('docx')" >/dev/null 2>&1; then
+  node docs/make-instruction.js 'dist/Инструкция.docx' >/dev/null
+  zip -d 'dist/Инструкция.docx' '*/' >/dev/null 2>&1 || true
+fi
+
+# Архив для передачи: файлы лежат в корне архива, имена записаны в UTF-8
+python3 - <<'PY'
+import zipfile, os
+names = ['Start.bat', 'DesktopSorter.ps1', 'Настройки.txt', 'catalog-template.html', 'Инструкция.docx']
+out = 'DesktopSorter.zip'
+if os.path.exists(out): os.remove(out)
+with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+    for n in names:
+        z.write(os.path.join('dist', n), n)
+PY
+echo "Собрано: $(ls dist | tr '\n' ' ')и архив DesktopSorter.zip"
