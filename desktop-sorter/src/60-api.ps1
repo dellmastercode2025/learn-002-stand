@@ -373,22 +373,42 @@ function New-LocalAnalysis([string]$method, [string]$folder, [double]$conf, [str
     }
 }
 
-function Get-KeywordAnalysis([string]$name, [string]$ext, [string]$text, [string]$note) {
+function Test-KeywordIn($w, [string]$s) {
+    if (-not $s) { return $false }
+    if ($w.Regex) { return $w.Regex.IsMatch($s) }
+    return $s.Contains($w.Text)
+}
+
+function Get-KeywordAnalysis([string]$name, [string]$ext, [string]$text, [string]$note, $html) {
+    # Папка по ключевым словам. Слово в имени файла весит втрое больше слова в тексте,
+    # словосочетание весит больше одиночного слова. Уверенно раскладываются только файлы
+    # с ключевым словом в имени, остальные идут в папку «На разбор».
     $nm = $name.ToLowerInvariant()
     $tx = ''
     if ($text) { $tx = $text.ToLowerInvariant() }
-    $best = ''; $bestScore = 0
+    $best = ''; $bestScore = 0; $nameHit = $false
     foreach ($rule in $script:Cfg.Keywords) {
-        $score = 0
+        $score = 0; $inName = $false
         foreach ($w in $rule.Words) {
-            if ($nm.Contains($w)) { $score += 3 }
-            if ($tx -and $tx.Contains($w)) { $score += 1 }
+            if (Test-KeywordIn $w $nm) { $score += 3 * $w.Weight; $inName = $true }
+            if (Test-KeywordIn $w $tx) { $score += $w.Weight }
         }
-        if ($score -gt $bestScore) { $bestScore = $score; $best = $rule.Folder }
+        if ($score -gt $bestScore) { $bestScore = $score; $best = $rule.Folder; $nameHit = $inName }
     }
-    if (-not $best) { return (New-LocalAnalysis 'ключевые слова' $script:Cfg.ReviewFolder 0.3 (($note + ' подходящих ключевых слов не найдено').Trim())) }
+    # HTML-инструмент виден и без Claude: по встроенным скриптам
+    if ($html -and -not $html.Saved -and $html.InlineScript -ge 300 -and @($script:ToolFolders).Count -gt 0) {
+        $osi = ($best -like 'ОСИ*')
+        $target = ''
+        foreach ($tp in $script:ToolFolders) { if (($tp -like 'ОСИ*') -eq $osi) { $target = $tp; break } }
+        if (-not $target) { $target = $script:ToolFolders[0] }
+        $an = New-LocalAnalysis 'ключевые слова' $target 0.8 (($note + '; HTML-инструмент определён по встроенным скриптам').Trim(';', ' '))
+        $an.doc_type = 'HTML-инструмент'
+        if ($html.Title) { $an.tool_purpose = [string]$html.Title; $an.description = [string]$html.Title }
+        return $an
+    }
+    if (-not $best) { return (New-LocalAnalysis 'ключевые слова' $script:Cfg.ReviewFolder 0.3 (($note + '; подходящих ключевых слов не найдено').Trim(';', ' '))) }
     $conf = 0.5
-    if ($bestScore -ge 3) { $conf = 0.8 }
+    if ($nameHit) { $conf = 0.8 }
     $an = New-LocalAnalysis 'ключевые слова' $best $conf $note
     $an.name_informative = (-not (Test-BadName (Get-NameNoExt $name)))
     return $an

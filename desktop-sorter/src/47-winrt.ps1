@@ -232,9 +232,11 @@ function Read-ScanContent([string]$path, [string]$ext, [long]$size) {
 
     # Подмена для самопроверки вне Windows
     if (-not $script:IsWin -and $env:DESKTOPSORTER_TEST_SCAN -eq '1') {
-        $side = $path + '.ocr.txt'
         $t = 'Тестовый распознанный текст первой страницы документа'
-        if ([IO.File]::Exists($side)) { $t = (Read-TextFile $side).Trim() }
+        if ($env:DESKTOPSORTER_TEST_OCR_DIR) {
+            $side = [IO.Path]::Combine($env:DESKTOPSORTER_TEST_OCR_DIR, ([IO.Path]::GetFileName($path) + '.ocr.txt'))
+            if ([IO.File]::Exists($side)) { $t = (Read-TextFile $side).Trim() }
+        }
         if ($t -eq 'PASSWORD') { $res.State = 'protected'; $res.Note = 'защищён паролем'; return $res }
         if ($env:DESKTOPSORTER_TEST_JPEG) { $res.Image = [IO.File]::ReadAllBytes($env:DESKTOPSORTER_TEST_JPEG) }
         if ($t -eq 'EMPTY') { $res.Note = 'текст не распознан'; return $res }

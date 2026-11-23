@@ -70,7 +70,8 @@ function Get-AnalysisQueue {
     $fp = $script:Api.Fingerprint
     $queue = New-Object System.Collections.ArrayList
     $recheck = New-Object System.Collections.ArrayList
-    foreach ($id in @($script:Db.Records.Keys | Sort-Object)) {
+    # Порядок по пути: файлы обрабатываются в одном и том же порядке при каждом запуске
+    foreach ($id in @($script:Db.Records.Keys | Sort-Object { $script:Db.Records[$_].rel })) {
         $rec = $script:Db.Records[$id]
         if ($rec.missing) { continue }
         if ($rec.unit -and -not $rec.unitMain) { $rec.status = 'unit'; continue }
@@ -137,14 +138,14 @@ function Get-LocalDecision($rec, [bool]$useApi) {
     }
     if ($c.State -eq 'unverified' -and (Get-Opt 'ЕслиСканНеПроверен').ToLowerInvariant() -eq 'не отправлять') {
         $note = 'скан не проверен на пометку ДСП и в Claude не отправлялся'
-        if ($c.Note) { $note += ': ' + $c.Note }
-        $an = Get-KeywordAnalysis $rec.name $rec.ext '' $note
+        if ($c.Note) { $note += ' (' + $c.Note + ')' }
+        $an = Get-KeywordAnalysis $rec.name $rec.ext '' $note $null
         $an.fp = $script:Api.Fingerprint
         Set-RecordResult $rec $an 'new' $note
         return @{ Send = $false }
     }
     if (-not $useApi) {
-        $an = Get-KeywordAnalysis $rec.name $rec.ext $c.Text 'Claude не использовался'
+        $an = Get-KeywordAnalysis $rec.name $rec.ext $c.Text 'Claude не использовался' $c.Html
         $an.fp = 'без-claude'
         Set-RecordResult $rec $an 'new' ''
         return @{ Send = $false }
@@ -228,8 +229,11 @@ function Invoke-Analysis {
     $timeout = Get-OptInt 'ТаймаутЗапроса_сек'
     $inflight = New-Object System.Collections.ArrayList
     $retry = New-Object System.Collections.ArrayList
+    $busyHash = @{}                                         # содержимое, которое сейчас анализируется
+    $deferred = New-Object System.Collections.ArrayList     # копии таких файлов ждут ответа
     $idx = 0; $done = 0; $total = $work.Count
     $failStreak = 0; $fatal = ''; $stopped = $false
+    $netStreak = 0; $everOk = $false; $lastNetErr = ''      # попытки подряд без связи с сервисом
     $pauseUntil = Get-Date
     $started = Get-Date
     $lastSave = Get-Date
@@ -254,6 +258,7 @@ function Invoke-Analysis {
                 $rec = $p.Rec
                 $script:Usage.Requests++
                 if ($r.Status -eq 200) {
+                    $netStreak = 0; $everOk = $true
                     $parsed = ConvertFrom-ApiResponse $r.Body
                     if ($parsed.Ok) {
                         $failStreak = 0
@@ -291,6 +296,7 @@ function Invoke-Analysis {
                     continue
                 }
                 $retryable = ($r.Network -or $r.Status -eq 408 -or $r.Status -eq 409 -or $r.Status -eq 429 -or $r.Status -ge 500)
+                if ($r.Network -or $r.Status -eq 408 -or ($r.Status -ge 500 -and $r.Status -ne 529)) { $netStreak++; $lastNetErr = $errText }
                 if ($retryable -and $p.Attempt -lt $maxRetry) {
                     $wait = $backoff[[Math]::Min($p.Attempt, $backoff.Count - 1)]
                     if ($r.RetryAfter -gt 0) { $wait = [Math]::Min(300, $r.RetryAfter) }
@@ -306,24 +312,38 @@ function Invoke-Analysis {
                 # Попытки исчерпаны: папка по ключевым словам, файл помечается
                 $script:Usage.Failed++
                 $failStreak++
-                $an = Get-KeywordAnalysis $rec.name $rec.ext $p.Content.Text ('Claude не ответил: ' + $errText)
+                $an = Get-KeywordAnalysis $rec.name $rec.ext $p.Content.Text ('Claude не ответил: ' + $errText) $p.Content.Html
                 $an.fp = 'повтор'
                 Set-RecordResult $rec $an 'new' ''
                 $done++
             }
+            # Файлы с содержимым, по которому ответ уже получен, возвращаются в очередь
+            if ($deferred.Count -gt 0) {
+                $busy = @{}
+                foreach ($x in $inflight) { if ($x.Rec.hash) { $busy[$x.Rec.hash] = $true } }
+                foreach ($x in $retry) { if ($x.Item.Rec.hash) { $busy[$x.Item.Rec.hash] = $true } }
+                $busyHash = $busy
+                for ($i = $deferred.Count - 1; $i -ge 0; $i--) {
+                    if (-not $busyHash.ContainsKey($deferred[$i].hash)) { $work.Insert($idx, $deferred[$i]); $deferred.RemoveAt($i) }
+                }
+            }
 
             # --- 2. Claude недоступен: новые запросы не отправляются, после ответа на уже отправленные - вопрос
-            $hold = ($fatal -ne '' -or $failStreak -ge 5)
+            # Нет связи: если ещё ни один ответ не получен, хватает двух кругов попыток, иначе четырёх
+            $netLimit = [Math]::Max(8, 4 * $maxPar)
+            if (-not $everOk) { $netLimit = [Math]::Max(4, 2 * $maxPar) }
+            $hold = ($fatal -ne '' -or $failStreak -ge 5 -or $netStreak -ge $netLimit)
             if ($hold -and $inflight.Count -eq 0) {
                 Clear-Status
                 $why = $fatal
+                if (-not $why -and $netStreak -ge $netLimit) { $why = "нет связи с сервисом, попыток подряд без ответа: $netStreak ($lastNetErr)" }
                 if (-not $why) { $why = 'пять файлов подряд остались без ответа' }
                 Warn "Claude недоступен: $why."
                 if (Ask-YesNo 'Продолжить без Claude, по ключевым словам? Ответ «нет» остановит работу, её можно будет продолжить позже.') {
-                    $useApi = $false; $fatal = ''; $failStreak = 0; $hold = $false
+                    $useApi = $false; $fatal = ''; $failStreak = 0; $netStreak = 0; $hold = $false
                     foreach ($x in $retry) {
                         $rec = $x.Item.Rec
-                        $an = Get-KeywordAnalysis $rec.name $rec.ext $x.Item.Content.Text 'Claude недоступен'
+                        $an = Get-KeywordAnalysis $rec.name $rec.ext $x.Item.Content.Text 'Claude недоступен' $x.Item.Content.Html
                         $an.fp = 'повтор'
                         Set-RecordResult $rec $an 'new' ''
                         $done++
@@ -341,7 +361,21 @@ function Invoke-Analysis {
                 }
                 if (-not $item) {
                     if ($idx -ge $work.Count) { break }
+                    # Пока связь не восстановилась, новые файлы не отправляются: ждём повторов
+                    if ($useApi -and $netStreak -ge $maxPar -and $retry.Count -gt 0) { break }
                     $rec = $work[$idx]; $idx++
+                    if ($rec.hash -and -not (Find-DspMark $rec.name)) {
+                        $hit = Get-ApiCache $rec.hash $fp
+                        if ($hit) {
+                            # Такой же файл уже разобран в этом запуске: второй раз в Claude не отправляется
+                            $an = @{}
+                            foreach ($k in @($hit.Keys)) { $an[$k] = $hit[$k] }
+                            Set-RecordResult $rec $an 'new' ''
+                            $done++; $local++; $progress = $true
+                            continue
+                        }
+                        if ($busyHash.ContainsKey($rec.hash)) { [void]$deferred.Add($rec); $local++; continue }
+                    }
                     $d = $null
                     try { $d = Get-LocalDecision $rec $useApi }
                     catch {
@@ -355,7 +389,7 @@ function Invoke-Analysis {
                     $item = @{ Rec = $rec; Content = $d.Content; Attempt = 0; Revalidate = $false; Drop = $false; Net = $null }
                 }
                 if (-not $useApi) {
-                    $an = Get-KeywordAnalysis $item.Rec.name $item.Rec.ext $item.Content.Text 'Claude не использовался'
+                    $an = Get-KeywordAnalysis $item.Rec.name $item.Rec.ext $item.Content.Text 'Claude не использовался' $item.Content.Html
                     $an.fp = 'повтор'
                     Set-RecordResult $item.Rec $an 'new' ''
                     $done++; $local++
@@ -365,9 +399,11 @@ function Invoke-Analysis {
                     $json = Build-RequestBody $item.Rec $item.Content $item.Drop @($script:VndNames) @($script:InsNames)
                     $item.Net = Start-ApiRequest $json
                     [void]$inflight.Add($item)
+                    if ($item.Rec.hash) { $busyHash[$item.Rec.hash] = $true }
                 } catch {
                     # Соединение не установилось: считаем сетевой ошибкой и повторяем позже
                     $msg = Get-ErrText $_
+                    $netStreak++; $lastNetErr = $msg
                     if ($item.Attempt -lt $maxRetry) {
                         $wait = $backoff[[Math]::Min($item.Attempt, $backoff.Count - 1)]
                         $item.Attempt++
@@ -376,7 +412,7 @@ function Invoke-Analysis {
                     } else {
                         $script:Usage.Failed++
                         $failStreak++
-                        $an = Get-KeywordAnalysis $item.Rec.name $item.Rec.ext $item.Content.Text ('Claude недоступен: ' + $msg)
+                        $an = Get-KeywordAnalysis $item.Rec.name $item.Rec.ext $item.Content.Text ('Claude недоступен: ' + $msg) $item.Content.Html
                         $an.fp = 'повтор'
                         Set-RecordResult $item.Rec $an 'new' ''
                         $done++
@@ -386,7 +422,7 @@ function Invoke-Analysis {
             }
 
             # --- 4. Завершение и ожидание
-            if ($inflight.Count -eq 0 -and $retry.Count -eq 0 -and $idx -ge $work.Count) { break }
+            if ($inflight.Count -eq 0 -and $retry.Count -eq 0 -and $idx -ge $work.Count -and $deferred.Count -eq 0) { break }
             Show-AnalysisStatus $done $total $inflight.Count $started
             if (((Get-Date) - $lastSave).TotalSeconds -gt 60) { Save-Db; $lastSave = Get-Date }
             if (-not $progress) {

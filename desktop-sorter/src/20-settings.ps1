@@ -185,6 +185,7 @@ function Initialize-Config([string]$path) {
     $script:Cfg.InsKinds = $ins.ToArray()
 
     $script:Cfg.Clubs = @((Get-List 'Клубы P&I') | ForEach-Object { $_.Text })
+    $script:Cfg.NoRename = @((Get-List 'Без переименования') | ForEach-Object { $_.Text.Trim().Trim('\') } | Where-Object { $_ })
 
     # --- Суда
     $fleet = New-Object System.Collections.ArrayList
@@ -240,8 +241,19 @@ function Initialize-Config([string]$path) {
             Warn "Файл настроек, строка $($e.Line): папки «$fp» нет в разделе [Папки]. Строка ключевых слов пропущена."
             continue
         }
-        $words = @($parts[1] -split ',' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
-        if ($words.Count -gt 0) { [void]$kw.Add(@{ Folder = (Get-FolderTemplate $fp).Path; Words = $words }) }
+        $words = New-Object System.Collections.ArrayList
+        foreach ($raw in ($parts[1] -split ',')) {
+            $t = $raw.Trim()
+            if (-not $t) { continue }
+            # Сокращение из заглавных букв (ОСИ, ЖКХ, ISO) ищется только как отдельное слово,
+            # иначе «оси» нашлось бы в словах «просим» и «вносит»
+            $whole = ($t.Length -le 5 -and $t -cmatch '^[\p{Lu}\p{N}]+$' -and $t -cmatch '\p{Lu}')
+            $w = $t.ToLowerInvariant()
+            $rx = $null
+            if ($whole) { $rx = New-Object regex ('(?<![\p{L}\p{N}])' + [regex]::Escape($w) + '(?![\p{L}\p{N}])') }
+            [void]$words.Add(@{ Text = $w; Regex = $rx; Weight = @($w -split '\s+').Count })
+        }
+        if ($words.Count -gt 0) { [void]$kw.Add(@{ Folder = (Get-FolderTemplate $fp).Path; Words = $words.ToArray() }) }
     }
     $script:Cfg.Keywords = $kw.ToArray()
 

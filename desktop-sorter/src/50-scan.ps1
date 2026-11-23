@@ -34,6 +34,17 @@ function Test-ToolCandidate([string]$full) {
     return $null
 }
 
+function Test-TextMentions([string]$path, [string]$needle) {
+    # Ищет строку в начале текстового файла, пробуя кодировки UTF-8, 866 и 1251
+    try {
+        $bytes = Read-Head $path 30000
+        foreach ($t in @((ConvertFrom-TextBytes $bytes), $script:Enc866.GetString($bytes), $script:Enc1251.GetString($bytes))) {
+            if ($t.IndexOf($needle, [StringComparison]::OrdinalIgnoreCase) -ge 0) { return $true }
+        }
+    } catch { }
+    return $false
+}
+
 function Find-ToolFolderMain([IO.DirectoryInfo]$di) {
     # Отдельная папка HTML-инструмента: инструмент вместе с файлом запуска
     # или с соседними файлами, на которые он ссылается. Возвращает имя главного файла или ''.
@@ -47,12 +58,7 @@ function Find-ToolFolderMain([IO.DirectoryInfo]$di) {
         foreach ($h in ($htmls | Sort-Object Length -Descending)) {
             $info = Test-ToolCandidate $h.FullName
             if (-not $info) { continue }
-            foreach ($l in $launchers) {
-                try {
-                    $t = Read-TextHead $l.FullName 20000
-                    if ($t.IndexOf($h.Name, [StringComparison]::OrdinalIgnoreCase) -ge 0) { return $h.Name }
-                } catch { }
-            }
+            foreach ($l in $launchers) { if (Test-TextMentions $l.FullName $h.Name) { return $h.Name } }
             foreach ($ref in $info.Refs) {
                 $r = $ref.Replace('/', [string]$script:DS).TrimStart('.', [char]$script:DS)
                 if (-not $r -or $r.Contains('..')) { continue }
@@ -60,6 +66,18 @@ function Find-ToolFolderMain([IO.DirectoryInfo]$di) {
                 try { if ([IO.File]::Exists($p) -or [IO.Directory]::Exists($p)) { return $h.Name } } catch { }
             }
         }
+    } catch { }
+    return ''
+}
+
+function Find-PlacedToolMain([IO.DirectoryInfo]$di) {
+    # Главный файл инструмента в папке, которая уже лежит в папке инструментов
+    $main = Find-ToolFolderMain $di
+    if ($main) { return $main }
+    try {
+        $htmls = @($di.GetFiles() | Where-Object { $script:ExtHtml -contains $_.Extension.ToLowerInvariant() } | Sort-Object Length -Descending)
+        foreach ($h in $htmls) { if (Test-ToolCandidate $h.FullName) { return $h.Name } }
+        if ($htmls.Count -gt 0) { return $htmls[0].Name }
     } catch { }
     return ''
 }
@@ -140,11 +158,7 @@ function Scan-Dir([string]$full, [string]$rel, [string]$unit) {
     if ($launchers.Count -gt 0 -and $toolHtml.Count -gt 0) {
         $cands = @($toolHtml | Where-Object { $inTools -or (Test-ToolCandidate $_.Full) })
         foreach ($l in $launchers) {
-            $text = ''
-            try { $text = Read-TextHead $l.Full 20000 } catch { }
-            foreach ($h in $cands) {
-                if ($text -and $text.IndexOf($h.Name, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $l.AttachedTo = $h.Rel; break }
-            }
+            foreach ($h in $cands) { if (Test-TextMentions $l.Full $h.Name) { $l.AttachedTo = $h.Rel; break } }
         }
     }
 
@@ -166,9 +180,16 @@ function Scan-Dir([string]$full, [string]$rel, [string]$unit) {
             continue
         }
         if ($inTools) {
-            # Папка инструмента, уже лежащая в папке инструментов
-            [void]$script:Scan.Units.Add(@{ Kind = 'tool'; Rel = $drel; Main = ''; Folder = $drel; Placed = $true })
+            # Папка инструмента, уже лежащая в папке инструментов: хранится целиком, главный файл попадает в описание
+            $main = Find-PlacedToolMain $d
+            $mainRel = ''
+            if ($main) { $mainRel = Join-RelParts $drel $main }
+            [void]$script:Scan.Units.Add(@{ Kind = 'tool'; Rel = $drel; Main = $mainRel; Folder = $drel; Placed = $true })
+            $before = $script:Scan.Files.Count
             Scan-Dir $d.FullName $drel $drel
+            for ($k = $before; $k -lt $script:Scan.Files.Count; $k++) {
+                if ($mainRel -and [string]::Equals($script:Scan.Files[$k].Rel, $mainRel, [StringComparison]::OrdinalIgnoreCase)) { $script:Scan.Files[$k].UnitMain = $true }
+            }
             continue
         }
         if ([IO.Directory]::Exists([IO.Path]::Combine($d.FullName, '.git'))) {
