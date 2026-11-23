@@ -11,8 +11,7 @@ param(
     [string]$Root = '',          # папка вместо рабочего стола (нужна для самопроверки)
     [string]$SettingsPath = '',  # другой файл настроек (нужен для самопроверки)
     [string]$ApiUrl = '',        # другой адрес API (нужен для самопроверки)
-    [switch]$Yes,                # отвечать «да» на подтверждения (нужно для самопроверки)
-    [switch]$NoPause
+    [switch]$Yes                 # отвечать «да» на подтверждения (нужно для самопроверки)
 )
 
 Set-StrictMode -Version 2.0
@@ -30,7 +29,6 @@ $script:ApiUrlOverride = $ApiUrl
 $script:RootOverride = $Root
 $script:ModeOverride = $Mode
 $script:SettingsOverride = $SettingsPath
-$script:NoPause      = [bool]$NoPause
 $script:LogPath      = $null
 $script:RunId        = (Get-Date).ToString('yyyyMMdd-HHmmss', $script:Inv)
 $script:ServiceName  = '_Каталог'
@@ -42,7 +40,7 @@ $script:FileNames = @{
     Meta      = 'meta.json'
     Journal   = 'Журнал операций.csv'
     Log       = 'Ход работы.log'
-    PlanJson  = 'plan.json'
+    PlanJson  = 'plan.jsonl'
     PlanHtml  = 'План разбора.html'
     PlanXlsx  = 'План разбора.xlsx'
     PlanCsv   = 'План разбора.csv'
@@ -59,12 +57,25 @@ $script:FileNames = @{
 #  Общие вспомогательные функции
 # =====================================================================
 
+$script:LogWriter = $null
 function Write-Log([string]$text) {
+    # Файл «Ход работы.log» держится открытым: на сетевой папке это в разы быстрее,
+    # чем открывать его заново на каждую строку. Каждая строка сразу сбрасывается в файл.
     if (-not $script:LogPath) { return }
+    $line = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss', $script:Inv) + ' ' + $text
     try {
-        $line = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss', $script:Inv) + ' ' + $text + "`r`n"
-        [IO.File]::AppendAllText($script:LogPath, $line, $script:Utf8Bom)
-    } catch { }
+        if (-not $script:LogWriter) {
+            $script:LogWriter = New-Object IO.StreamWriter($script:LogPath, $true, $script:Utf8Bom)
+            $script:LogWriter.AutoFlush = $true
+        }
+        $script:LogWriter.WriteLine($line)
+    } catch {
+        $script:LogWriter = $null
+        try { [IO.File]::AppendAllText($script:LogPath, $line + "`r`n", $script:Utf8Bom) } catch { }
+    }
+}
+function Close-Log {
+    if ($script:LogWriter) { try { $script:LogWriter.Dispose() } catch { }; $script:LogWriter = $null }
 }
 
 function Say([string]$text = '', [string]$color = '') {
@@ -94,13 +105,17 @@ function Clear-Status {
     }
 }
 
-function Ask-YesNo([string]$question) {
+function Ask-YesNo([string]$question, [bool]$strict = $false) {
+    # $strict: согласием считается только слово «да» целиком (перемещение файлов и откат),
+    # любой другой ответ и пустая строка означают «нет».
     if ($script:AutoYes) { Say ($question + ' да (автоматически)'); return $true }
     while ($true) {
         $a = Read-Host ($question + ' Введите «да» или «нет»')
         if ($null -eq $a) { return $false }
-        $a = $a.Trim().ToLowerInvariant()
-        if ($a -eq 'да' -or $a -eq 'д' -or $a -eq 'yes' -or $a -eq 'y') { Write-Log ($question + ' -> да'); return $true }
+        $a = $a.Trim().Trim('«', '»', '"', '.', '!').ToLowerInvariant()
+        if ($a -eq 'да') { Write-Log ($question + ' -> да'); return $true }
+        if ($strict) { Write-Log ($question + ' -> нет (ответ: ' + $a + ')'); return $false }
+        if ($a -eq 'д' -or $a -eq 'yes' -or $a -eq 'y') { Write-Log ($question + ' -> да'); return $true }
         if ($a -eq 'нет' -or $a -eq 'н' -or $a -eq 'no' -or $a -eq 'n' -or $a -eq '') { Write-Log ($question + ' -> нет'); return $false }
     }
 }
@@ -249,6 +264,8 @@ function Get-TextSha256([string]$text) {
 # ---------------------------------------------------------------------
 # Управляющие знаки, разделители строк U+2028 и U+2029, а также < > & (чтобы JSON можно было вставлять в HTML)
 $script:JsonEscapeRx = New-Object regex('[\x00-\x1f' + [char]0x2028 + [char]0x2029 + '<>&]')
+# Строка, которую нельзя записать как есть (нужна замена знаков)
+$script:JsonNeedRx = New-Object regex('["\\\x00-\x1f' + [char]0x2028 + [char]0x2029 + '<>&]')
 function Add-JsonString([System.Text.StringBuilder]$sb, [string]$s) {
     [void]$sb.Append('"')
     if ($s) {
@@ -275,14 +292,26 @@ function Add-JsonValue([System.Text.StringBuilder]$sb, $v) {
     if ($v -is [System.Collections.IDictionary]) {
         [void]$sb.Append('{')
         $keys = @($v.Keys)
-        if (-not ($v -is [System.Collections.Specialized.OrderedDictionary])) { $keys = @($keys | Sort-Object) }
+        if (-not ($v -is [System.Collections.Specialized.OrderedDictionary])) {
+            # Порядок ключей постоянный, чтобы файлы и запросы не менялись от запуска к запуску
+            $keys = [string[]]$keys
+            [Array]::Sort($keys, [StringComparer]::Ordinal)
+        }
         $first = $true
         foreach ($k in $keys) {
-            if (-not $first) { [void]$sb.Append(',') }
-            $first = $false
-            Add-JsonString $sb ([string]$k)
+            if ($first) { $first = $false } else { [void]$sb.Append(',') }
+            $ks = [string]$k
+            if ($script:JsonNeedRx.IsMatch($ks)) { Add-JsonString $sb $ks } else { [void]$sb.Append('"').Append($ks).Append('"') }
             [void]$sb.Append(':')
-            Add-JsonValue $sb $v[$k]
+            # Простые значения пишутся сразу: на десятках тысяч записей это в разы быстрее вызова функции
+            $x = $v[$k]
+            if ($null -eq $x) { [void]$sb.Append('null') }
+            elseif ($x -is [string]) {
+                if ($script:JsonNeedRx.IsMatch($x)) { Add-JsonString $sb $x } else { [void]$sb.Append('"').Append($x).Append('"') }
+            }
+            elseif ($x -is [bool]) { if ($x) { [void]$sb.Append('true') } else { [void]$sb.Append('false') } }
+            elseif ($x -is [int] -or $x -is [long]) { [void]$sb.Append($x.ToString($script:Inv)) }
+            else { Add-JsonValue $sb $x }
         }
         [void]$sb.Append('}')
         return
@@ -291,9 +320,11 @@ function Add-JsonValue([System.Text.StringBuilder]$sb, $v) {
         [void]$sb.Append('[')
         $first = $true
         foreach ($x in $v) {
-            if (-not $first) { [void]$sb.Append(',') }
-            $first = $false
-            Add-JsonValue $sb $x
+            if ($first) { $first = $false } else { [void]$sb.Append(',') }
+            if ($x -is [string]) {
+                if ($script:JsonNeedRx.IsMatch($x)) { Add-JsonString $sb $x } else { [void]$sb.Append('"').Append($x).Append('"') }
+            }
+            else { Add-JsonValue $sb $x }
         }
         [void]$sb.Append(']')
         return
@@ -319,30 +350,65 @@ function ConvertTo-JsonText($value) {
     return $sb.ToString()
 }
 function ConvertTo-Hash($o) {
-    # Переводит результат ConvertFrom-Json в хеш-таблицы и массивы
+    # Переводит разобранный JSON в хеш-таблицы и массивы.
+    # Строки, числа и логические значения переносятся без вызова функции (так быстрее).
     if ($null -eq $o) { return $null }
     if ($o -is [string]) { return $o }
     if ($o -is [datetime]) { return $o.ToString('yyyy-MM-dd HH:mm:ss', $script:Inv) }
     if ($o -is [ValueType]) { return $o }
     if ($o -is [System.Collections.IDictionary]) {
         $h = @{}
-        foreach ($k in @($o.Keys)) { $h[[string]$k] = ConvertTo-Hash $o[$k] }
+        foreach ($k in @($o.Keys)) {
+            $x = $o[$k]
+            if ($null -eq $x -or $x -is [string] -or ($x -is [ValueType] -and -not ($x -is [datetime]))) { $h[[string]$k] = $x }
+            else { $h[[string]$k] = ConvertTo-Hash $x }
+        }
         return $h
     }
     if ($o -is [System.Collections.IEnumerable]) {
         $l = New-Object System.Collections.ArrayList
-        foreach ($x in $o) { [void]$l.Add((ConvertTo-Hash $x)) }
+        foreach ($x in $o) {
+            if ($null -eq $x -or $x -is [string] -or ($x -is [ValueType] -and -not ($x -is [datetime]))) { [void]$l.Add($x) }
+            else { [void]$l.Add((ConvertTo-Hash $x)) }
+        }
         return ,($l.ToArray())
     }
     if ($o -is [System.Management.Automation.PSCustomObject]) {
         $h = @{}
-        foreach ($p in $o.PSObject.Properties) { $h[$p.Name] = ConvertTo-Hash $p.Value }
+        foreach ($p in $o.PSObject.Properties) {
+            $x = $p.Value
+            if ($null -eq $x -or $x -is [string] -or ($x -is [ValueType] -and -not ($x -is [datetime]))) { $h[$p.Name] = $x }
+            else { $h[$p.Name] = ConvertTo-Hash $x }
+        }
         return $h
     }
     return $o
 }
+
+# Разбор JSON. В Windows PowerShell 5.1 используется встроенный в .NET разборщик без ограничения
+# длины текста: команда ConvertFrom-Json там не читает JSON длиннее двух миллионов знаков и работает медленнее.
+$script:JsonSer = $null
+$script:JsonSerTried = $false
+function Get-JsonSerializer {
+    if (-not $script:JsonSerTried) {
+        $script:JsonSerTried = $true
+        if ($PSVersionTable.PSVersion.Major -le 5) {
+            try {
+                Add-Type -AssemblyName System.Web.Extensions
+                $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+                $ser.MaxJsonLength = [int]::MaxValue
+                $ser.RecursionLimit = 64
+                [void]$ser.DeserializeObject('{"a":[1,"b"]}')
+                $script:JsonSer = $ser
+            } catch { $script:JsonSer = $null }
+        }
+    }
+    return $script:JsonSer
+}
 function ConvertFrom-JsonText([string]$text) {
     if (-not $text) { return $null }
+    $ser = Get-JsonSerializer
+    if ($ser) { return (ConvertTo-Hash ($ser.DeserializeObject($text))) }
     $o = ConvertFrom-Json -InputObject $text
     return (ConvertTo-Hash $o)
 }
@@ -960,19 +1026,30 @@ $script:OpSeq = 0
 
 function New-OpId { $script:OpSeq++; return ($script:RunId + '-' + $script:OpSeq.ToString('00000', $script:Inv)) }
 
+$script:JournalWriter = $null
 function Write-Journal([string]$opId, [string]$fileId, [string]$type, [string]$src, [string]$dst, [string]$hash, [string]$status, [string]$err, [string]$rollback, [string]$runId = '') {
+    # Журнал только дописывается. Файл держится открытым, каждая строка сразу сбрасывается на диск:
+    # так запись на сетевой папке идёт в разы быстрее, а при сбое в журнале остаётся всё уже сделанное.
     $p = Get-ServicePath 'Journal'
     if (-not $runId) { $runId = $script:RunId }
-    $text = ''
-    if (-not [IO.File]::Exists($p)) { $text = (Format-CsvLine $script:JournalHead) + "`r`n" }
-    $text += (Format-CsvLine @($runId, $opId, $fileId, $type, $src, $dst, $hash, $status, (Get-NowText), $err, $rollback)) + "`r`n"
-    [IO.File]::AppendAllText($p, $text, $script:Utf8Bom)
+    $line = Format-CsvLine @($runId, $opId, $fileId, $type, $src, $dst, $hash, $status, (Get-NowText), $err, $rollback)
+    if (-not $script:JournalWriter) {
+        $isNew = (-not [IO.File]::Exists($p)) -or ((New-Object IO.FileInfo($p)).Length -eq 0)
+        $script:JournalWriter = New-Object IO.StreamWriter($p, $true, $script:Utf8Bom)
+        $script:JournalWriter.AutoFlush = $true
+        if ($isNew) { $script:JournalWriter.WriteLine((Format-CsvLine $script:JournalHead)) }
+    }
+    $script:JournalWriter.WriteLine($line)
+}
+function Close-Journal {
+    if ($script:JournalWriter) { try { $script:JournalWriter.Dispose() } catch { }; $script:JournalWriter = $null }
 }
 
 function Read-Journal {
     # Возвращает список строк журнала в виде хеш-таблиц
     $res = New-Object System.Collections.ArrayList
     $p = Get-ServicePath 'Journal'
+    Close-Journal
     if (-not [IO.File]::Exists($p)) { return ,@() }
     $first = $true
     foreach ($line in [IO.File]::ReadAllLines($p, [Text.Encoding]::UTF8)) {
@@ -1840,8 +1917,28 @@ function Get-ProcIds([string]$name) {
     try { $ids = @(Get-Process -Name $name -ErrorAction SilentlyContinue | ForEach-Object { $_.Id }) } catch { }
     return ,$ids
 }
+function Test-AutomationProc([int]$id) {
+    # Office, запущенный программой, имеет в командной строке слово Embedding или Automation.
+    # Так он отличается от Word или Excel, которые в ту же секунду мог открыть сам пользователь.
+    # Возвращает $true, $false или $null, если командную строку прочитать не удалось.
+    try {
+        $p = Get-CimInstance -ClassName Win32_Process -Filter ('ProcessId=' + $id) -ErrorAction Stop
+        if ($p -and $p.CommandLine) { return ([string]$p.CommandLine -match '(?i)embedding|automation') }
+    } catch { }
+    return $null
+}
 function Register-NewProc([string]$key, [string]$name, $before) {
-    foreach ($id in (Get-ProcIds $name)) { if ($before -notcontains $id) { $Shared.Pids[$key] = $id } }
+    # Запоминает процесс Office, который запустила программа: только его можно завершить при зависании
+    $new = @(Get-ProcIds $name | Where-Object { $before -notcontains $_ })
+    if ($new.Count -eq 0) { return }
+    $unknown = 0
+    foreach ($id in $new) {
+        $a = Test-AutomationProc $id
+        if ($a -eq $true) { $Shared.Pids[$key] = $id; return }
+        if ($null -eq $a) { $unknown++ }
+    }
+    # Командная строка недоступна: процесс запоминается, только если новый процесс ровно один
+    if ($new.Count -eq 1 -and $unknown -eq 1) { $Shared.Pids[$key] = $new[0] }
 }
 function Test-PasswordError($err) {
     $m = [string]$err.Exception.Message
@@ -2708,6 +2805,11 @@ function Scan-Dir([string]$full, [string]$rel, [string]$unit) {
         $drel = Join-RelParts $rel $dn
         if ($unit) { Scan-Dir $d.FullName $drel $unit; continue }
         if (-not $rel -and [string]::Equals($dn, $script:ServiceName, [StringComparison]::OrdinalIgnoreCase)) { continue }
+        if ([string]::Equals($dn, $script:ServiceName, [StringComparison]::OrdinalIgnoreCase)) {
+            # Служебная папка программы внутри другой папки (например, осталась от пробы на копиях):
+            # в ней лежат база и журналы, их нельзя ни разбирать, ни отправлять
+            [void]$script:Scan.Skipped.Add(@{ Rel = $drel; Reason = 'служебная папка программы, не разбирается' }); continue
+        }
         if ($script:ProgramRel -and [string]::Equals($drel, $script:ProgramRel, [StringComparison]::OrdinalIgnoreCase)) { continue }
         if (($d.Attributes -band $script:AttrHidSys) -ne 0) { continue }
         if (Test-Excluded $drel $true) { [void]$script:Scan.Excluded.Add($drel); continue }
@@ -3533,7 +3635,7 @@ function Invoke-Analysis {
     $busyHash = @{}                                         # содержимое, которое сейчас анализируется
     $deferred = New-Object System.Collections.ArrayList     # копии таких файлов ждут ответа
     $idx = 0; $done = 0; $total = $work.Count
-    $failStreak = 0; $fatal = ''; $stopped = $false
+    $failStreak = 0; $fatal = ''; $fatalStatus = 0; $stopped = $false
     $netStreak = 0; $everOk = $false; $lastNetErr = ''      # попытки подряд без связи с сервисом
     $pauseUntil = Get-Date
     $started = Get-Date
@@ -3585,7 +3687,7 @@ function Invoke-Analysis {
                 $errText = $r.Message
                 if (-not $r.Network) { $errText = Get-ApiErrorText $r.Status $r.Body }
                 if ($r.Status -eq 401 -or $r.Status -eq 402 -or $r.Status -eq 403 -or $r.Status -eq 404) {
-                    $fatal = $errText
+                    $fatal = $errText; $fatalStatus = $r.Status
                     [void]$retry.Add(@{ Item = $p; NotBefore = (Get-Date) })
                     continue
                 }
@@ -3640,8 +3742,18 @@ function Invoke-Analysis {
                 if (-not $why -and $netStreak -ge $netLimit) { $why = "нет связи с сервисом, попыток подряд без ответа: $netStreak ($lastNetErr)" }
                 if (-not $why) { $why = 'пять файлов подряд остались без ответа' }
                 Warn "Claude недоступен: $why."
-                if (Ask-YesNo 'Продолжить без Claude, по ключевым словам? Ответ «нет» остановит работу, её можно будет продолжить позже.') {
-                    $useApi = $false; $fatal = ''; $failStreak = 0; $netStreak = 0; $hold = $false
+                # Ключ не принят: его можно сразу ввести заново, отложенные файлы уйдут с новым ключом
+                $again = $false
+                if ($fatalStatus -eq 401 -and -not $script:AutoYes) {
+                    if ($env:ANTHROPIC_API_KEY) { Say 'Ключ взят из переменной среды ANTHROPIC_API_KEY. Исправьте её значение и запустите программу снова.' }
+                    elseif (Ask-YesNo 'Ввести ключ заново?') {
+                        $newKey = Request-ApiKey
+                        if ($newKey) { $script:Api.Key = $newKey; $again = $true }
+                    }
+                }
+                if ($again) { $fatal = ''; $fatalStatus = 0; $failStreak = 0; $netStreak = 0; $hold = $false }
+                elseif (Ask-YesNo 'Продолжить без Claude, по ключевым словам? Ответ «нет» остановит работу, её можно будет продолжить позже.') {
+                    $useApi = $false; $fatal = ''; $fatalStatus = 0; $failStreak = 0; $netStreak = 0; $hold = $false
                     foreach ($x in $retry) {
                         $rec = $x.Item.Rec
                         $an = Get-KeywordAnalysis $rec.name $rec.ext $x.Item.Content.Text 'Claude недоступен' $x.Item.Content.Html
@@ -3725,7 +3837,8 @@ function Invoke-Analysis {
             # --- 4. Завершение и ожидание
             if ($inflight.Count -eq 0 -and $retry.Count -eq 0 -and $idx -ge $work.Count -and $deferred.Count -eq 0) { break }
             Show-AnalysisStatus $done $total $inflight.Count $started
-            if (((Get-Date) - $lastSave).TotalSeconds -gt 60) { Save-Db; $lastSave = Get-Date }
+            # Ответы Claude сразу пишутся в файл сохранённых ответов, поэтому база сохраняется нечасто
+            if (((Get-Date) - $lastSave).TotalSeconds -gt 180) { Save-Db; $lastSave = Get-Date }
             if (-not $progress) {
                 if ($inflight.Count -gt 0) {
                     $tasks = [Threading.Tasks.Task[]]@($inflight | ForEach-Object { $_.Net.Task })
@@ -3925,8 +4038,12 @@ function Resolve-TargetName([string]$dstDir, [string]$base, [string]$stamp, [str
     $maxPath = Get-OptInt 'МаксДлинаПути'
     $tail = ''
     if ($stamp) { $tail = ' ' + $stamp }
+    # Для одинаковых названий запоминается последний выданный номер, чтобы не перебирать их заново
+    $seqKey = ($dstDir + '|' + $base + '|' + $tail + '|' + $ext).ToLowerInvariant()
     $n = 1
-    while ($n -lt 1000) {
+    if ($script:NameSeq.ContainsKey($seqKey)) { $n = [int]$script:NameSeq[$seqKey] + 1 }
+    $limit = $n + 5000
+    while ($n -lt $limit) {
         $b = $base
         $suffix = ''
         if ($n -gt 1) { $suffix = " ($n)" }
@@ -3939,7 +4056,7 @@ function Resolve-TargetName([string]$dstDir, [string]$base, [string]$stamp, [str
         $free = $true
         if ($taken.ContainsKey($key)) { $free = $false }
         elseif (-not [string]::Equals($rel, $selfRel, [StringComparison]::OrdinalIgnoreCase) -and [IO.File]::Exists((Join-Rel $script:Root $rel))) { $free = $false }
-        if ($free) { $taken[$key] = $true; return @{ Name = $name; Base = ($b + $suffix) } }
+        if ($free) { $taken[$key] = $true; $script:NameSeq[$seqKey] = $n; return @{ Name = $name; Base = ($b + $suffix) } }
         $n++
     }
     return @{ Error = 'не удалось подобрать свободное имя' }
@@ -3953,8 +4070,11 @@ function New-PlanRow($rec, [string]$kind) {
     }
 }
 
+$script:NameSeq = @{}
+
 function Build-Plan {
     # Возвращает список строк плана
+    $script:NameSeq = @{}
     $thr = Get-OptNum 'ПорогУверенности'
     $rows = New-Object System.Collections.ArrayList
     $byRel = @{}
@@ -4328,8 +4448,12 @@ function Get-PlanStats($rows) {
 
 function Save-Plan($rows) {
     $created = Get-NowText
-    # --- plan.json: по нему выполняется план
-    $list = New-Object System.Collections.ArrayList
+    # --- plan.jsonl: по нему выполняется план. Первая строка - сведения о плане, дальше по строке на файл.
+    #     Построчная запись нужна потому, что Windows PowerShell 5.1 не читает JSON длиннее двух миллионов знаков.
+    $skipped = @($script:Scan.Skipped | ForEach-Object { [ordered]@{ rel = $_.Rel; reason = $_.Reason } })
+    $sbp = New-Object System.Text.StringBuilder
+    Add-JsonValue $sbp ([ordered]@{ run = $script:RunId; created = $created; root = $script:Root; count = @($rows).Count; skipped = $skipped })
+    [void]$sbp.Append("`n")
     foreach ($row in $rows) {
         $rec = $row.Rec
         $o = [ordered]@{
@@ -4339,11 +4463,10 @@ function Save-Plan($rows) {
         }
         if ($row.Unit) { $o.unitSrc = $row.Unit.Folder }
         if ($row.ContainsKey('UnitDst')) { $o.unitDst = $row.UnitDst }
-        [void]$list.Add($o)
+        Add-JsonValue $sbp $o
+        [void]$sbp.Append("`n")
     }
-    $skipped = @($script:Scan.Skipped | ForEach-Object { [ordered]@{ rel = $_.Rel; reason = $_.Reason } })
-    $plan = [ordered]@{ run = $script:RunId; created = $created; root = $script:Root; rows = $list.ToArray(); skipped = $skipped }
-    Write-TextFile (Get-ServicePath 'PlanJson') (ConvertTo-JsonText $plan) $script:Utf8NoBom
+    Write-TextFile (Get-ServicePath 'PlanJson') $sbp.ToString() $script:Utf8NoBom
 
     # --- Таблица для Excel
     $table = New-Object System.Collections.ArrayList
@@ -4359,7 +4482,7 @@ function Save-Plan($rows) {
         [void]$table.Add(@($n, $rec.id, (Get-RelParent $rec.rel), $rec.name, $dstDir, $dstName, $row.Action, (Get-Str $an 'doc_type'), (Get-Str $an 'description'), $conf, (Get-Str $an 'method'), $row.Note))
     }
     $folders = New-Object System.Collections.ArrayList
-    [void]$folders.Add(@('Папки структуры (в столбце «Папка назначения» можно указывать только их)', 'Что попадает'))
+    [void]$folders.Add(@('Папки структуры. В столбце «Папка назначения» можно указывать только их. Вместо слов в фигурных скобках пишите своё значение, например: Договоры\2025', 'Что попадает'))
     foreach ($t in $script:Cfg.Folders) { [void]$folders.Add(@($t.Path, $t.Desc)) }
     [void]$folders.Add(@($script:Cfg.ReviewFolder, 'Файлы, которые не удалось уверенно отнести ни к одной папке'))
     [void]$folders.Add(@($script:Cfg.ProtectedFolder, 'Файлы, защищённые паролем'))
@@ -4402,10 +4525,11 @@ h1{font-size:20px;margin:0 0 6px}.sub{color:var(--mut);margin:0 0 10px}
 .bar button{padding:7px 12px;border:1px solid var(--line);background:var(--card);border-radius:6px;font:inherit;cursor:pointer}
 .bar button.on{background:var(--acc);border-color:var(--acc);color:#fff}
 main{padding:14px 20px 40px}
-table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line)}
-th,td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top;text-align:left;word-break:break-word}
-th{background:#eef2f7;position:sticky;top:0;font-weight:600}
-td.n{color:var(--mut);white-space:nowrap}td.arrow{color:var(--mut)}
+table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);table-layout:fixed}
+th,td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top;text-align:left;overflow-wrap:anywhere}
+th{background:#eef2f7;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+td.n{color:var(--mut);white-space:nowrap}td.arrow{color:var(--mut);padding-left:0;padding-right:0;text-align:center}
+col.c1{width:52px}col.c2{width:10%}col.c3{width:15%}col.c4{width:24px}col.c5{width:18%}col.c6{width:16%}col.c7{width:14%}col.c8{width:64px}
 tr.none td{background:var(--none);color:#444}tr.review td{background:var(--warn)}tr.dsp td{background:var(--dsp)}tr.err td{background:var(--err)}
 .note{color:var(--mut);font-size:13px}.how{color:var(--mut);font-size:12px}
 h2{font-size:16px;margin:26px 0 8px}
@@ -4414,7 +4538,7 @@ h2{font-size:16px;margin:26px 0 8px}
     [void]$sb.Append("<header><h1>План разбора</h1><p class=`"sub`">Составлен $(ConvertTo-HtmlText $created). Папка: $(ConvertTo-HtmlText $script:Root). Пока план не применён, ни один файл не изменён.</p>")
     [void]$sb.Append("<div class=`"stats`"><span>Всего файлов: <b>$($st.Total)</b></span><span>Будет перемещено: <b>$($st.Move)</b></span><span>Только переименовано: <b>$($st.Rename)</b></span><span>В «$(ConvertTo-HtmlText $script:Cfg.ReviewFolder)»: <b>$($st.Review)</b></span><span>Остаются на месте: <b>$($st.None)</b></span><span>Документы ДСП: <b>$($st.Dsp)</b></span><span>С паролем: <b>$($st.Protected)</b></span></div>")
     [void]$sb.Append('<div class="bar"><input id="q" type="search" placeholder="Поиск по плану: имя, папка, описание"><button data-f="all" class="on">Все</button><button data-f="move">Перемещаются</button><button data-f="review">На разбор</button><button data-f="none">Остаются</button><button data-f="dsp">ДСП</button></div></header><main>')
-    [void]$sb.Append('<table id="t"><thead><tr><th>№</th><th>Где лежит</th><th>Имя сейчас</th><th></th><th>Папка назначения</th><th>Новое имя</th><th>Описание</th><th>Уверенность</th><th>Примечание</th></tr></thead><tbody>')
+    [void]$sb.Append('<table id="t"><colgroup><col class="c1"><col class="c2"><col class="c3"><col class="c4"><col class="c5"><col class="c6"><col class="c7"><col class="c8"><col></colgroup><thead><tr><th>№</th><th>Где лежит</th><th>Имя сейчас</th><th></th><th>Папка назначения</th><th>Новое имя</th><th>Описание</th><th title="Уверенность от 0 до 1">Увер.</th><th>Примечание</th></tr></thead><tbody>')
     $n = 0
     foreach ($row in $rows) {
         $n++
@@ -4445,9 +4569,10 @@ h2{font-size:16px;margin:26px 0 8px}
     }
     [void]$sb.Append(@'
 </main><script>
-(function(){var q=document.getElementById('q'),rows=[].slice.call(document.querySelectorAll('#t tbody tr')),f='all';
-function run(){var s=q.value.trim().toLowerCase();rows.forEach(function(r){var ok=(f==='all'||r.className===f)&&(!s||r.textContent.toLowerCase().indexOf(s)>=0);r.style.display=ok?'':'none';});}
-q.addEventListener('input',run);
+(function(){var q=document.getElementById('q'),rows=[].slice.call(document.querySelectorAll('#t tbody tr')),f='all',text=null,timer=null;
+function run(){var s=q.value.trim().toLowerCase();if(s&&!text){text=rows.map(function(r){return r.textContent.toLowerCase();});}
+rows.forEach(function(r,i){var ok=(f==='all'||r.className===f)&&(!s||text[i].indexOf(s)>=0);r.style.display=ok?'':'none';});}
+q.addEventListener('input',function(){clearTimeout(timer);timer=setTimeout(run,120);});
 [].slice.call(document.querySelectorAll('.bar button')).forEach(function(b){b.addEventListener('click',function(){f=b.getAttribute('data-f');[].slice.call(document.querySelectorAll('.bar button')).forEach(function(x){x.className=x===b?'on':'';});run();});});})();
 </script></body></html>
 '@)
@@ -4473,14 +4598,22 @@ function ConvertTo-StructureDir([string]$value) {
 }
 
 function Read-Plan {
-    # Возвращает @{ Rows (список хеш-таблиц из plan.json с учётом правок); Edited; Rejected; Source }
+    # Возвращает @{ Rows (список хеш-таблиц из plan.jsonl с учётом правок); Edited; Rejected; Source }
     $pj = Get-ServicePath 'PlanJson'
     if (-not [IO.File]::Exists($pj)) { throw 'Сохранённого плана нет. Сначала выполните режим «Только план».' }
-    $plan = ConvertFrom-JsonText (Read-TextFile $pj)
+    $plan = $null
+    $rowList = New-Object System.Collections.ArrayList
+    foreach ($line in [IO.File]::ReadAllLines($pj, [Text.Encoding]::UTF8)) {
+        if (-not $line.Trim()) { continue }
+        $h = ConvertFrom-JsonText $line
+        if ($null -eq $plan) { $plan = $h } else { [void]$rowList.Add($h) }
+    }
+    if ($null -eq $plan -or -not $plan.ContainsKey('root')) { throw 'Файл сохранённого плана повреждён. Составьте план заново (режим «Только план»).' }
     if (-not [string]::Equals([string]$plan.root, $script:Root, [StringComparison]::OrdinalIgnoreCase)) {
         throw "План составлен для другой папки: $($plan.root)"
     }
-    $rows = @($plan.rows)
+    if ($plan.ContainsKey('count') -and [int]$plan.count -ne $rowList.Count) { throw 'Файл сохранённого плана записан не полностью. Составьте план заново (режим «Только план»).' }
+    $rows = $rowList.ToArray()
     $byId = @{}
     foreach ($r in $rows) { $byId[[string]$r.id] = $r }
 
@@ -4829,7 +4962,9 @@ function Invoke-Apply($rows) {
             [void]$res.Errors.Add("$([string]$r.src): $err")
             Write-Log "  ошибка: $([string]$r.src): $err"
         }
-        if (((Get-Date) - $lastSave).TotalSeconds -gt 30) { Update-DbIndex; Save-Db; $lastSave = Get-Date }
+        # База сохраняется раз в две минуты: на тысячах файлов запись занимает секунды,
+        # а всё выполненное и так уже записано в журнал
+        if (((Get-Date) - $lastSave).TotalSeconds -gt 120) { Update-DbIndex; Save-Db; $lastSave = Get-Date }
     }
     } finally {
         # Если работу прервали, уже выполненные перемещения всё равно попадают в базу
@@ -4892,7 +5027,7 @@ function Invoke-Rollback {
     Say ''
     Say "Будет отменён запуск от $($run.Time): операций с файлами $files, с папками $dirs."
     if ($runs.Count -gt 1) { Say "После этого можно будет отменить и более ранние запуски (их ещё $($runs.Count - 1))." }
-    if (-not (Ask-YesNo 'Вернуть файлы на прежние места?')) { return $false }
+    if (-not (Ask-YesNo 'Вернуть файлы на прежние места?' $true)) { Say 'Откат не выполнен. Ни один файл не изменён.'; return $false }
 
     $ok = 0; $bad = 0
     $ops = @($run.Ops)
@@ -5051,9 +5186,15 @@ function Read-LabelsJson {
     if (-not [IO.File]::Exists($p)) { return 'null' }
     try {
         $text = (Read-TextFile $p).Trim()
-        $h = ConvertFrom-JsonText $text
-        if (-not ($h -is [System.Collections.IDictionary])) { throw 'неверный формат' }
-        return (ConvertTo-JsonText $h)
+        if ($text.Length -gt 0 -and [int]$text[0] -eq 0xFEFF) { $text = $text.Substring(1) }
+        # Проверка формата. Очень большой файл PowerShell 5.1 разобрать не может, его проверит сама страница.
+        if ($text.Length -lt 1500000) {
+            $h = ConvertFrom-JsonText $text
+            if (-not ($h -is [System.Collections.IDictionary])) { throw 'неверный формат' }
+        } elseif (-not $text.StartsWith('{')) { throw 'неверный формат' }
+        # Файл вставляется в страницу целиком, как строка: страница разбирает его сама,
+        # поэтому списки меток доходят без искажений, а ошибка в файле не ломает каталог
+        return (ConvertTo-JsonText $text)
     } catch {
         Warn ('Файл меток labels.json не прочитан и в каталог не попал: ' + (Get-ErrText $_))
         return 'null'
@@ -5208,13 +5349,13 @@ function Invoke-ApplyStage {
     if ($plan.Edited -gt 0) { Say ("  Учтено ваших правок из файла «{0}»: {1}." -f $plan.Source, $plan.Edited) }
     foreach ($r in $plan.Rejected) { Warn $r }
     if ($todo.Count -eq 0) { Say 'В плане нет операций, применять нечего.'; return $false }
-    if (-not (Ask-YesNo ("Применить план: переместить и переименовать файлов - {0}?" -f $todo.Count))) {
+    if (-not (Ask-YesNo ("Применить план: переместить и переименовать файлов - {0}?" -f $todo.Count) $true)) {
         Say 'План не применён. Ни один файл не изменён.'
         return $false
     }
     Say 'Шаг 5. Выполнение плана…'
     $res = Invoke-Apply $plan.Rows
-    try { [IO.File]::Move((Get-ServicePath 'PlanJson'), ([IO.Path]::Combine($script:ServiceDir, ('plan-' + $script:RunId + '-выполнен.json')))) } catch { }
+    try { [IO.File]::Move((Get-ServicePath 'PlanJson'), ([IO.Path]::Combine($script:ServiceDir, ('plan-' + $script:RunId + '-выполнен.jsonl')))) } catch { }
     $script:LastApply = $res
     $review = @($plan.Rows | Where-Object { $_.action -ne 'нет' -and [string]::Equals([string]$_.dstDir, $script:Cfg.ReviewFolder, [StringComparison]::OrdinalIgnoreCase) }).Count
     Say ''
@@ -5319,7 +5460,9 @@ function Start-Main {
     } finally {
         try { Stop-OfficeWorker } catch { }
         Remove-TempDir
+        Close-Journal
         Exit-RunLock
+        Close-Log
     }
     return $code
 }

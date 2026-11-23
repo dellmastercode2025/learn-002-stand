@@ -168,6 +168,11 @@ function Scan-Dir([string]$full, [string]$rel, [string]$unit) {
         $drel = Join-RelParts $rel $dn
         if ($unit) { Scan-Dir $d.FullName $drel $unit; continue }
         if (-not $rel -and [string]::Equals($dn, $script:ServiceName, [StringComparison]::OrdinalIgnoreCase)) { continue }
+        if ([string]::Equals($dn, $script:ServiceName, [StringComparison]::OrdinalIgnoreCase)) {
+            # Служебная папка программы внутри другой папки (например, осталась от пробы на копиях):
+            # в ней лежат база и журналы, их нельзя ни разбирать, ни отправлять
+            [void]$script:Scan.Skipped.Add(@{ Rel = $drel; Reason = 'служебная папка программы, не разбирается' }); continue
+        }
         if ($script:ProgramRel -and [string]::Equals($drel, $script:ProgramRel, [StringComparison]::OrdinalIgnoreCase)) { continue }
         if (($d.Attributes -band $script:AttrHidSys) -ne 0) { continue }
         if (Test-Excluded $drel $true) { [void]$script:Scan.Excluded.Add($drel); continue }

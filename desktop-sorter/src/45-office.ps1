@@ -18,8 +18,28 @@ function Get-ProcIds([string]$name) {
     try { $ids = @(Get-Process -Name $name -ErrorAction SilentlyContinue | ForEach-Object { $_.Id }) } catch { }
     return ,$ids
 }
+function Test-AutomationProc([int]$id) {
+    # Office, запущенный программой, имеет в командной строке слово Embedding или Automation.
+    # Так он отличается от Word или Excel, которые в ту же секунду мог открыть сам пользователь.
+    # Возвращает $true, $false или $null, если командную строку прочитать не удалось.
+    try {
+        $p = Get-CimInstance -ClassName Win32_Process -Filter ('ProcessId=' + $id) -ErrorAction Stop
+        if ($p -and $p.CommandLine) { return ([string]$p.CommandLine -match '(?i)embedding|automation') }
+    } catch { }
+    return $null
+}
 function Register-NewProc([string]$key, [string]$name, $before) {
-    foreach ($id in (Get-ProcIds $name)) { if ($before -notcontains $id) { $Shared.Pids[$key] = $id } }
+    # Запоминает процесс Office, который запустила программа: только его можно завершить при зависании
+    $new = @(Get-ProcIds $name | Where-Object { $before -notcontains $_ })
+    if ($new.Count -eq 0) { return }
+    $unknown = 0
+    foreach ($id in $new) {
+        $a = Test-AutomationProc $id
+        if ($a -eq $true) { $Shared.Pids[$key] = $id; return }
+        if ($null -eq $a) { $unknown++ }
+    }
+    # Командная строка недоступна: процесс запоминается, только если новый процесс ровно один
+    if ($new.Count -eq 1 -and $unknown -eq 1) { $Shared.Pids[$key] = $new[0] }
 }
 function Test-PasswordError($err) {
     $m = [string]$err.Exception.Message

@@ -2,12 +2,25 @@
 #  Общие вспомогательные функции
 # =====================================================================
 
+$script:LogWriter = $null
 function Write-Log([string]$text) {
+    # Файл «Ход работы.log» держится открытым: на сетевой папке это в разы быстрее,
+    # чем открывать его заново на каждую строку. Каждая строка сразу сбрасывается в файл.
     if (-not $script:LogPath) { return }
+    $line = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss', $script:Inv) + ' ' + $text
     try {
-        $line = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss', $script:Inv) + ' ' + $text + "`r`n"
-        [IO.File]::AppendAllText($script:LogPath, $line, $script:Utf8Bom)
-    } catch { }
+        if (-not $script:LogWriter) {
+            $script:LogWriter = New-Object IO.StreamWriter($script:LogPath, $true, $script:Utf8Bom)
+            $script:LogWriter.AutoFlush = $true
+        }
+        $script:LogWriter.WriteLine($line)
+    } catch {
+        $script:LogWriter = $null
+        try { [IO.File]::AppendAllText($script:LogPath, $line + "`r`n", $script:Utf8Bom) } catch { }
+    }
+}
+function Close-Log {
+    if ($script:LogWriter) { try { $script:LogWriter.Dispose() } catch { }; $script:LogWriter = $null }
 }
 
 function Say([string]$text = '', [string]$color = '') {
@@ -37,13 +50,17 @@ function Clear-Status {
     }
 }
 
-function Ask-YesNo([string]$question) {
+function Ask-YesNo([string]$question, [bool]$strict = $false) {
+    # $strict: согласием считается только слово «да» целиком (перемещение файлов и откат),
+    # любой другой ответ и пустая строка означают «нет».
     if ($script:AutoYes) { Say ($question + ' да (автоматически)'); return $true }
     while ($true) {
         $a = Read-Host ($question + ' Введите «да» или «нет»')
         if ($null -eq $a) { return $false }
-        $a = $a.Trim().ToLowerInvariant()
-        if ($a -eq 'да' -or $a -eq 'д' -or $a -eq 'yes' -or $a -eq 'y') { Write-Log ($question + ' -> да'); return $true }
+        $a = $a.Trim().Trim('«', '»', '"', '.', '!').ToLowerInvariant()
+        if ($a -eq 'да') { Write-Log ($question + ' -> да'); return $true }
+        if ($strict) { Write-Log ($question + ' -> нет (ответ: ' + $a + ')'); return $false }
+        if ($a -eq 'д' -or $a -eq 'yes' -or $a -eq 'y') { Write-Log ($question + ' -> да'); return $true }
         if ($a -eq 'нет' -or $a -eq 'н' -or $a -eq 'no' -or $a -eq 'n' -or $a -eq '') { Write-Log ($question + ' -> нет'); return $false }
     }
 }
@@ -192,6 +209,8 @@ function Get-TextSha256([string]$text) {
 # ---------------------------------------------------------------------
 # Управляющие знаки, разделители строк U+2028 и U+2029, а также < > & (чтобы JSON можно было вставлять в HTML)
 $script:JsonEscapeRx = New-Object regex('[\x00-\x1f' + [char]0x2028 + [char]0x2029 + '<>&]')
+# Строка, которую нельзя записать как есть (нужна замена знаков)
+$script:JsonNeedRx = New-Object regex('["\\\x00-\x1f' + [char]0x2028 + [char]0x2029 + '<>&]')
 function Add-JsonString([System.Text.StringBuilder]$sb, [string]$s) {
     [void]$sb.Append('"')
     if ($s) {
@@ -218,14 +237,26 @@ function Add-JsonValue([System.Text.StringBuilder]$sb, $v) {
     if ($v -is [System.Collections.IDictionary]) {
         [void]$sb.Append('{')
         $keys = @($v.Keys)
-        if (-not ($v -is [System.Collections.Specialized.OrderedDictionary])) { $keys = @($keys | Sort-Object) }
+        if (-not ($v -is [System.Collections.Specialized.OrderedDictionary])) {
+            # Порядок ключей постоянный, чтобы файлы и запросы не менялись от запуска к запуску
+            $keys = [string[]]$keys
+            [Array]::Sort($keys, [StringComparer]::Ordinal)
+        }
         $first = $true
         foreach ($k in $keys) {
-            if (-not $first) { [void]$sb.Append(',') }
-            $first = $false
-            Add-JsonString $sb ([string]$k)
+            if ($first) { $first = $false } else { [void]$sb.Append(',') }
+            $ks = [string]$k
+            if ($script:JsonNeedRx.IsMatch($ks)) { Add-JsonString $sb $ks } else { [void]$sb.Append('"').Append($ks).Append('"') }
             [void]$sb.Append(':')
-            Add-JsonValue $sb $v[$k]
+            # Простые значения пишутся сразу: на десятках тысяч записей это в разы быстрее вызова функции
+            $x = $v[$k]
+            if ($null -eq $x) { [void]$sb.Append('null') }
+            elseif ($x -is [string]) {
+                if ($script:JsonNeedRx.IsMatch($x)) { Add-JsonString $sb $x } else { [void]$sb.Append('"').Append($x).Append('"') }
+            }
+            elseif ($x -is [bool]) { if ($x) { [void]$sb.Append('true') } else { [void]$sb.Append('false') } }
+            elseif ($x -is [int] -or $x -is [long]) { [void]$sb.Append($x.ToString($script:Inv)) }
+            else { Add-JsonValue $sb $x }
         }
         [void]$sb.Append('}')
         return
@@ -234,9 +265,11 @@ function Add-JsonValue([System.Text.StringBuilder]$sb, $v) {
         [void]$sb.Append('[')
         $first = $true
         foreach ($x in $v) {
-            if (-not $first) { [void]$sb.Append(',') }
-            $first = $false
-            Add-JsonValue $sb $x
+            if ($first) { $first = $false } else { [void]$sb.Append(',') }
+            if ($x -is [string]) {
+                if ($script:JsonNeedRx.IsMatch($x)) { Add-JsonString $sb $x } else { [void]$sb.Append('"').Append($x).Append('"') }
+            }
+            else { Add-JsonValue $sb $x }
         }
         [void]$sb.Append(']')
         return
@@ -262,30 +295,65 @@ function ConvertTo-JsonText($value) {
     return $sb.ToString()
 }
 function ConvertTo-Hash($o) {
-    # Переводит результат ConvertFrom-Json в хеш-таблицы и массивы
+    # Переводит разобранный JSON в хеш-таблицы и массивы.
+    # Строки, числа и логические значения переносятся без вызова функции (так быстрее).
     if ($null -eq $o) { return $null }
     if ($o -is [string]) { return $o }
     if ($o -is [datetime]) { return $o.ToString('yyyy-MM-dd HH:mm:ss', $script:Inv) }
     if ($o -is [ValueType]) { return $o }
     if ($o -is [System.Collections.IDictionary]) {
         $h = @{}
-        foreach ($k in @($o.Keys)) { $h[[string]$k] = ConvertTo-Hash $o[$k] }
+        foreach ($k in @($o.Keys)) {
+            $x = $o[$k]
+            if ($null -eq $x -or $x -is [string] -or ($x -is [ValueType] -and -not ($x -is [datetime]))) { $h[[string]$k] = $x }
+            else { $h[[string]$k] = ConvertTo-Hash $x }
+        }
         return $h
     }
     if ($o -is [System.Collections.IEnumerable]) {
         $l = New-Object System.Collections.ArrayList
-        foreach ($x in $o) { [void]$l.Add((ConvertTo-Hash $x)) }
+        foreach ($x in $o) {
+            if ($null -eq $x -or $x -is [string] -or ($x -is [ValueType] -and -not ($x -is [datetime]))) { [void]$l.Add($x) }
+            else { [void]$l.Add((ConvertTo-Hash $x)) }
+        }
         return ,($l.ToArray())
     }
     if ($o -is [System.Management.Automation.PSCustomObject]) {
         $h = @{}
-        foreach ($p in $o.PSObject.Properties) { $h[$p.Name] = ConvertTo-Hash $p.Value }
+        foreach ($p in $o.PSObject.Properties) {
+            $x = $p.Value
+            if ($null -eq $x -or $x -is [string] -or ($x -is [ValueType] -and -not ($x -is [datetime]))) { $h[$p.Name] = $x }
+            else { $h[$p.Name] = ConvertTo-Hash $x }
+        }
         return $h
     }
     return $o
 }
+
+# Разбор JSON. В Windows PowerShell 5.1 используется встроенный в .NET разборщик без ограничения
+# длины текста: команда ConvertFrom-Json там не читает JSON длиннее двух миллионов знаков и работает медленнее.
+$script:JsonSer = $null
+$script:JsonSerTried = $false
+function Get-JsonSerializer {
+    if (-not $script:JsonSerTried) {
+        $script:JsonSerTried = $true
+        if ($PSVersionTable.PSVersion.Major -le 5) {
+            try {
+                Add-Type -AssemblyName System.Web.Extensions
+                $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+                $ser.MaxJsonLength = [int]::MaxValue
+                $ser.RecursionLimit = 64
+                [void]$ser.DeserializeObject('{"a":[1,"b"]}')
+                $script:JsonSer = $ser
+            } catch { $script:JsonSer = $null }
+        }
+    }
+    return $script:JsonSer
+}
 function ConvertFrom-JsonText([string]$text) {
     if (-not $text) { return $null }
+    $ser = Get-JsonSerializer
+    if ($ser) { return (ConvertTo-Hash ($ser.DeserializeObject($text))) }
     $o = ConvertFrom-Json -InputObject $text
     return (ConvertTo-Hash $o)
 }

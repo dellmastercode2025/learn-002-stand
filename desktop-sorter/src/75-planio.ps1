@@ -213,8 +213,12 @@ function Get-PlanStats($rows) {
 
 function Save-Plan($rows) {
     $created = Get-NowText
-    # --- plan.json: по нему выполняется план
-    $list = New-Object System.Collections.ArrayList
+    # --- plan.jsonl: по нему выполняется план. Первая строка - сведения о плане, дальше по строке на файл.
+    #     Построчная запись нужна потому, что Windows PowerShell 5.1 не читает JSON длиннее двух миллионов знаков.
+    $skipped = @($script:Scan.Skipped | ForEach-Object { [ordered]@{ rel = $_.Rel; reason = $_.Reason } })
+    $sbp = New-Object System.Text.StringBuilder
+    Add-JsonValue $sbp ([ordered]@{ run = $script:RunId; created = $created; root = $script:Root; count = @($rows).Count; skipped = $skipped })
+    [void]$sbp.Append("`n")
     foreach ($row in $rows) {
         $rec = $row.Rec
         $o = [ordered]@{
@@ -224,11 +228,10 @@ function Save-Plan($rows) {
         }
         if ($row.Unit) { $o.unitSrc = $row.Unit.Folder }
         if ($row.ContainsKey('UnitDst')) { $o.unitDst = $row.UnitDst }
-        [void]$list.Add($o)
+        Add-JsonValue $sbp $o
+        [void]$sbp.Append("`n")
     }
-    $skipped = @($script:Scan.Skipped | ForEach-Object { [ordered]@{ rel = $_.Rel; reason = $_.Reason } })
-    $plan = [ordered]@{ run = $script:RunId; created = $created; root = $script:Root; rows = $list.ToArray(); skipped = $skipped }
-    Write-TextFile (Get-ServicePath 'PlanJson') (ConvertTo-JsonText $plan) $script:Utf8NoBom
+    Write-TextFile (Get-ServicePath 'PlanJson') $sbp.ToString() $script:Utf8NoBom
 
     # --- Таблица для Excel
     $table = New-Object System.Collections.ArrayList
@@ -244,7 +247,7 @@ function Save-Plan($rows) {
         [void]$table.Add(@($n, $rec.id, (Get-RelParent $rec.rel), $rec.name, $dstDir, $dstName, $row.Action, (Get-Str $an 'doc_type'), (Get-Str $an 'description'), $conf, (Get-Str $an 'method'), $row.Note))
     }
     $folders = New-Object System.Collections.ArrayList
-    [void]$folders.Add(@('Папки структуры (в столбце «Папка назначения» можно указывать только их)', 'Что попадает'))
+    [void]$folders.Add(@('Папки структуры. В столбце «Папка назначения» можно указывать только их. Вместо слов в фигурных скобках пишите своё значение, например: Договоры\2025', 'Что попадает'))
     foreach ($t in $script:Cfg.Folders) { [void]$folders.Add(@($t.Path, $t.Desc)) }
     [void]$folders.Add(@($script:Cfg.ReviewFolder, 'Файлы, которые не удалось уверенно отнести ни к одной папке'))
     [void]$folders.Add(@($script:Cfg.ProtectedFolder, 'Файлы, защищённые паролем'))
@@ -287,10 +290,11 @@ h1{font-size:20px;margin:0 0 6px}.sub{color:var(--mut);margin:0 0 10px}
 .bar button{padding:7px 12px;border:1px solid var(--line);background:var(--card);border-radius:6px;font:inherit;cursor:pointer}
 .bar button.on{background:var(--acc);border-color:var(--acc);color:#fff}
 main{padding:14px 20px 40px}
-table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line)}
-th,td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top;text-align:left;word-break:break-word}
-th{background:#eef2f7;position:sticky;top:0;font-weight:600}
-td.n{color:var(--mut);white-space:nowrap}td.arrow{color:var(--mut)}
+table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);table-layout:fixed}
+th,td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top;text-align:left;overflow-wrap:anywhere}
+th{background:#eef2f7;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+td.n{color:var(--mut);white-space:nowrap}td.arrow{color:var(--mut);padding-left:0;padding-right:0;text-align:center}
+col.c1{width:52px}col.c2{width:10%}col.c3{width:15%}col.c4{width:24px}col.c5{width:18%}col.c6{width:16%}col.c7{width:14%}col.c8{width:64px}
 tr.none td{background:var(--none);color:#444}tr.review td{background:var(--warn)}tr.dsp td{background:var(--dsp)}tr.err td{background:var(--err)}
 .note{color:var(--mut);font-size:13px}.how{color:var(--mut);font-size:12px}
 h2{font-size:16px;margin:26px 0 8px}
@@ -299,7 +303,7 @@ h2{font-size:16px;margin:26px 0 8px}
     [void]$sb.Append("<header><h1>План разбора</h1><p class=`"sub`">Составлен $(ConvertTo-HtmlText $created). Папка: $(ConvertTo-HtmlText $script:Root). Пока план не применён, ни один файл не изменён.</p>")
     [void]$sb.Append("<div class=`"stats`"><span>Всего файлов: <b>$($st.Total)</b></span><span>Будет перемещено: <b>$($st.Move)</b></span><span>Только переименовано: <b>$($st.Rename)</b></span><span>В «$(ConvertTo-HtmlText $script:Cfg.ReviewFolder)»: <b>$($st.Review)</b></span><span>Остаются на месте: <b>$($st.None)</b></span><span>Документы ДСП: <b>$($st.Dsp)</b></span><span>С паролем: <b>$($st.Protected)</b></span></div>")
     [void]$sb.Append('<div class="bar"><input id="q" type="search" placeholder="Поиск по плану: имя, папка, описание"><button data-f="all" class="on">Все</button><button data-f="move">Перемещаются</button><button data-f="review">На разбор</button><button data-f="none">Остаются</button><button data-f="dsp">ДСП</button></div></header><main>')
-    [void]$sb.Append('<table id="t"><thead><tr><th>№</th><th>Где лежит</th><th>Имя сейчас</th><th></th><th>Папка назначения</th><th>Новое имя</th><th>Описание</th><th>Уверенность</th><th>Примечание</th></tr></thead><tbody>')
+    [void]$sb.Append('<table id="t"><colgroup><col class="c1"><col class="c2"><col class="c3"><col class="c4"><col class="c5"><col class="c6"><col class="c7"><col class="c8"><col></colgroup><thead><tr><th>№</th><th>Где лежит</th><th>Имя сейчас</th><th></th><th>Папка назначения</th><th>Новое имя</th><th>Описание</th><th title="Уверенность от 0 до 1">Увер.</th><th>Примечание</th></tr></thead><tbody>')
     $n = 0
     foreach ($row in $rows) {
         $n++
@@ -330,9 +334,10 @@ h2{font-size:16px;margin:26px 0 8px}
     }
     [void]$sb.Append(@'
 </main><script>
-(function(){var q=document.getElementById('q'),rows=[].slice.call(document.querySelectorAll('#t tbody tr')),f='all';
-function run(){var s=q.value.trim().toLowerCase();rows.forEach(function(r){var ok=(f==='all'||r.className===f)&&(!s||r.textContent.toLowerCase().indexOf(s)>=0);r.style.display=ok?'':'none';});}
-q.addEventListener('input',run);
+(function(){var q=document.getElementById('q'),rows=[].slice.call(document.querySelectorAll('#t tbody tr')),f='all',text=null,timer=null;
+function run(){var s=q.value.trim().toLowerCase();if(s&&!text){text=rows.map(function(r){return r.textContent.toLowerCase();});}
+rows.forEach(function(r,i){var ok=(f==='all'||r.className===f)&&(!s||text[i].indexOf(s)>=0);r.style.display=ok?'':'none';});}
+q.addEventListener('input',function(){clearTimeout(timer);timer=setTimeout(run,120);});
 [].slice.call(document.querySelectorAll('.bar button')).forEach(function(b){b.addEventListener('click',function(){f=b.getAttribute('data-f');[].slice.call(document.querySelectorAll('.bar button')).forEach(function(x){x.className=x===b?'on':'';});run();});});})();
 </script></body></html>
 '@)
@@ -358,14 +363,22 @@ function ConvertTo-StructureDir([string]$value) {
 }
 
 function Read-Plan {
-    # Возвращает @{ Rows (список хеш-таблиц из plan.json с учётом правок); Edited; Rejected; Source }
+    # Возвращает @{ Rows (список хеш-таблиц из plan.jsonl с учётом правок); Edited; Rejected; Source }
     $pj = Get-ServicePath 'PlanJson'
     if (-not [IO.File]::Exists($pj)) { throw 'Сохранённого плана нет. Сначала выполните режим «Только план».' }
-    $plan = ConvertFrom-JsonText (Read-TextFile $pj)
+    $plan = $null
+    $rowList = New-Object System.Collections.ArrayList
+    foreach ($line in [IO.File]::ReadAllLines($pj, [Text.Encoding]::UTF8)) {
+        if (-not $line.Trim()) { continue }
+        $h = ConvertFrom-JsonText $line
+        if ($null -eq $plan) { $plan = $h } else { [void]$rowList.Add($h) }
+    }
+    if ($null -eq $plan -or -not $plan.ContainsKey('root')) { throw 'Файл сохранённого плана повреждён. Составьте план заново (режим «Только план»).' }
     if (-not [string]::Equals([string]$plan.root, $script:Root, [StringComparison]::OrdinalIgnoreCase)) {
         throw "План составлен для другой папки: $($plan.root)"
     }
-    $rows = @($plan.rows)
+    if ($plan.ContainsKey('count') -and [int]$plan.count -ne $rowList.Count) { throw 'Файл сохранённого плана записан не полностью. Составьте план заново (режим «Только план»).' }
+    $rows = $rowList.ToArray()
     $byId = @{}
     foreach ($r in $rows) { $byId[[string]$r.id] = $r }
 

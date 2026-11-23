@@ -1,8 +1,952 @@
 <!DOCTYPE html>
-<html lang="ru"><head><meta charset="utf-8"><title>Каталог рабочего стола</title></head>
-<body><h1>Каталог рабочего стола</h1><p>Временная заготовка страницы.</p>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Каталог рабочего стола</title>
+<style>
+:root {
+  --bg: #f4f5f7; --panel: #ffffff; --line: #dfe3e8; --line2: #eceff3; --text: #1c2430; --muted: #627084;
+  --accent: #1f5fbf; --accent-bg: #e6effb; --hover: #f1f5fa; --mark: #ffe58a; --danger: #b3261e;
+  --badge: #eef1f5; --shadow: 0 8px 28px rgba(20, 30, 50, .18);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15181d; --panel: #1d2128; --line: #323945; --line2: #282e38; --text: #e4e8ee; --muted: #98a3b3;
+    --accent: #7fb0ff; --accent-bg: #223556; --hover: #252b35; --mark: #6b5a12; --danger: #ff8a80;
+    --badge: #2a303a; --shadow: 0 8px 28px rgba(0, 0, 0, .55);
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "Segoe UI", system-ui, -apple-system, Arial, sans-serif; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+.app { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+
+/* Шапка */
+header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 12px 18px 10px; }
+.top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+h1 { font-size: 19px; font-weight: 600; margin: 0; white-space: nowrap; }
+.search { flex: 1 1 320px; position: relative; min-width: 220px; }
+.search input { width: 100%; padding: 9px 34px 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 15px; }
+.search input:focus { outline: 2px solid var(--accent); outline-offset: -1px; background: var(--panel); }
+.search .clear { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); border: 0; background: none; color: var(--muted); font-size: 18px; padding: 2px 8px; display: none; }
+.search.has .clear { display: block; }
+.built { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+.lists { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
+.chip { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 4px 12px; }
+.chip b { font-weight: 600; margin-left: 6px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.chip:hover { background: var(--hover); }
+.chip.on { background: var(--accent-bg); border-color: var(--accent); color: var(--accent); }
+.chip.on b { color: var(--accent); }
+.spacer { flex: 1; }
+.btn { border: 1px solid var(--line); background: var(--panel); border-radius: 7px; padding: 5px 12px; }
+.btn:hover { background: var(--hover); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+@media (prefers-color-scheme: dark) { .btn.primary { color: #10151c; } }
+.btn.warn { border-color: #d9822b; }
+.btn .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #d9822b; margin-right: 6px; vertical-align: 1px; }
+
+/* Основная часть */
+main { display: grid; grid-template-columns: 290px 1fr; min-height: 0; }
+aside { background: var(--panel); border-right: 1px solid var(--line); overflow: auto; padding: 10px 6px 30px 10px; }
+aside h2 { font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 12px 8px 6px; font-weight: 600; }
+.tree, .tree ul { list-style: none; margin: 0; padding: 0; }
+.tree ul { padding-left: 16px; }
+.node { display: flex; align-items: center; gap: 2px; border-radius: 6px; padding: 2px 6px 2px 0; }
+.node:hover { background: var(--hover); }
+.node.on { background: var(--accent-bg); color: var(--accent); }
+.tw { width: 20px; height: 22px; border: 0; background: none; color: var(--muted); padding: 0; flex: none; font-size: 11px; }
+.tw.leaf { visibility: hidden; }
+.nm { flex: 1; border: 0; background: none; text-align: left; padding: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cnt { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.lab-row { display: flex; align-items: center; gap: 8px; border-radius: 6px; padding: 4px 8px; border: 0; background: none; width: 100%; text-align: left; }
+.lab-row:hover { background: var(--hover); }
+.lab-row.on { background: var(--accent-bg); color: var(--accent); }
+.lab-row .nm2 { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ldot { width: 11px; height: 11px; border-radius: 50%; flex: none; display: inline-block; box-shadow: inset 0 0 0 1px rgba(0,0,0,.18); }
+.hint { color: var(--muted); font-size: 12.5px; margin: 6px 8px; }
+
+section.content { display: grid; grid-template-rows: auto auto 1fr; min-width: 0; min-height: 0; }
+.filters { display: flex; gap: 8px 10px; align-items: center; flex-wrap: wrap; padding: 10px 16px 8px; }
+.filters label { color: var(--muted); font-size: 12.5px; display: flex; align-items: center; gap: 6px; }
+.filters select, .filters input[type=date] { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); padding: 4px 6px; max-width: 170px; }
+.status { display: flex; align-items: center; gap: 10px; padding: 0 16px 8px; color: var(--muted); flex-wrap: wrap; }
+.status strong { color: var(--text); font-weight: 600; }
+.wrap { overflow: auto; min-height: 0; border-top: 1px solid var(--line); background: var(--panel); }
+table { border-collapse: separate; border-spacing: 0; width: 100%; table-layout: fixed; }
+thead th { position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--line); text-align: left; font-weight: 600; font-size: 12.5px; color: var(--muted); padding: 8px 10px; white-space: nowrap; user-select: none; }
+thead th.sortable { cursor: pointer; }
+thead th.sortable:hover { color: var(--text); }
+thead th .ar { font-size: 10px; margin-left: 4px; color: var(--accent); }
+tbody td { border-bottom: 1px solid var(--line2); padding: 7px 10px; vertical-align: top; overflow: hidden; text-overflow: ellipsis; }
+tbody tr.row:hover td { background: var(--hover); }
+tbody tr.row.sel td { background: var(--accent-bg); }
+td.c-chk, th.c-chk { width: 36px; padding-right: 0; }
+th.c-name { width: 27%; } th.c-dir { width: 17%; } th.c-type { width: 11%; } th.c-mod { width: 160px; } th.c-size { width: 84px; } th.c-ext { width: 62px; }
+td.c-size, td.c-mod, td.c-ext { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
+td.c-size { text-align: right; } th.c-size { text-align: right; }
+.fname { border: 0; background: none; padding: 0; text-align: left; font-weight: 600; word-break: break-word; }
+.fname:hover { color: var(--accent); text-decoration: underline; }
+.orig { color: var(--muted); font-size: 12px; margin-top: 1px; word-break: break-word; }
+.dir { color: var(--muted); word-break: break-word; }
+.desc { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.badge { background: var(--badge); border-radius: 4px; padding: 0 6px; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.badge.b-dsp, .badge.b-protected { color: var(--danger); }
+.pill { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); border-radius: 999px; padding: 0 8px 0 6px; font-size: 11.5px; white-space: nowrap; }
+mark { background: var(--mark); color: inherit; border-radius: 2px; padding: 0 1px; }
+tr.det td { background: var(--bg); padding: 12px 16px 14px 46px; white-space: normal; }
+.kv { display: grid; grid-template-columns: 190px 1fr; gap: 4px 14px; max-width: 1100px; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; word-break: break-word; }
+.acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
+.acts a.btn { text-decoration: none; color: inherit; }
+.empty { padding: 48px 20px; text-align: center; color: var(--muted); }
+.more { padding: 14px; text-align: center; color: var(--muted); }
+
+/* Панель выделения */
+.selbar { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 8px 12px; display: none; align-items: center; gap: 10px; z-index: 20; }
+.selbar.show { display: flex; }
+.pop { position: fixed; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); padding: 6px; z-index: 40; min-width: 230px; max-height: 60vh; overflow: auto; }
+.pop button.it { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: none; text-align: left; padding: 6px 8px; border-radius: 6px; }
+.pop button.it:hover { background: var(--hover); }
+.pop .st { width: 16px; text-align: center; color: var(--accent); font-weight: 700; }
+.pop hr { border: 0; border-top: 1px solid var(--line); margin: 6px 0; }
+
+/* Окна */
+.veil { position: fixed; inset: 0; background: rgba(15, 20, 30, .45); display: none; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
+.veil.show { display: flex; }
+.dlg { background: var(--panel); border-radius: 12px; box-shadow: var(--shadow); width: min(640px, 100%); max-height: 88vh; overflow: auto; padding: 18px 20px; }
+.dlg h3 { margin: 0 0 12px; font-size: 17px; }
+.dlg p { margin: 8px 0; }
+.dlg .foot { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; flex-wrap: wrap; }
+.lrow { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+.lrow input[type=text] { flex: 1; border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; background: var(--bg); min-width: 0; }
+.lrow input[type=color] { width: 34px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; }
+.lrow .n { color: var(--muted); font-size: 12px; width: 70px; text-align: right; }
+.swatches { display: flex; gap: 6px; }
+.swatches button { width: 22px; height: 22px; border-radius: 50%; border: 2px solid transparent; padding: 0; }
+.swatches button.on { border-color: var(--text); }
+.toast { position: fixed; right: 18px; bottom: 18px; background: #1c2430; color: #fff; border-radius: 8px; padding: 10px 14px; box-shadow: var(--shadow); z-index: 60; max-width: 420px; display: none; }
+.toast.show { display: block; }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; } aside { display: none; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="top">
+      <h1>Каталог рабочего стола</h1>
+      <div class="search" id="searchBox">
+        <input id="q" type="search" placeholder="Поиск по названию, описанию, контрагенту, судну, ключевым словам…" autocomplete="off" spellcheck="false">
+        <button class="clear" id="qClear" title="Очистить поиск" aria-label="Очистить поиск">×</button>
+      </div>
+      <div class="built" id="built"></div>
+    </div>
+    <div class="lists">
+      <button class="chip on" data-list="all">Все файлы<b id="nAll">0</b></button>
+      <button class="chip" data-list="week">Изменены за 7 дней<b id="nWeek">0</b></button>
+      <button class="chip" data-list="review">На разбор<b id="nReview">0</b></button>
+      <button class="chip" data-list="dups">Дубликаты<b id="nDups">0</b></button>
+      <span class="spacer"></span>
+      <button class="btn" id="btnCsv" title="Сохранить показанные файлы в таблицу CSV для Excel">Выгрузить в CSV</button>
+      <button class="btn" id="btnLabels">Метки…</button>
+      <button class="btn" id="btnSave" title="Записать метки в файл labels.json в папке _Каталог">Сохранить метки в файл</button>
+      <button class="btn" id="btnHelp" title="Справка">?</button>
+    </div>
+  </header>
+  <main>
+    <aside>
+      <h2>Папки</h2>
+      <ul class="tree" id="tree"></ul>
+      <h2>Метки</h2>
+      <div id="labelList"></div>
+    </aside>
+    <section class="content">
+      <div class="filters">
+        <label>Тип файла <select id="fExt"></select></label>
+        <label>Вид документа <select id="fType"></select></label>
+        <label>Метка <select id="fLabel"></select></label>
+        <label>Изменён с <input type="date" id="fFrom"></label>
+        <label>по <input type="date" id="fTo"></label>
+        <button class="btn" id="btnReset">Сбросить фильтры</button>
+      </div>
+      <div class="status"><span id="found"></span></div>
+      <div class="wrap" id="wrap">
+        <table>
+          <thead><tr>
+            <th class="c-chk"><input type="checkbox" id="chkAll" title="Выбрать все показанные файлы"></th>
+            <th class="c-name sortable" data-sort="n">Имя<span class="ar"></span></th>
+            <th class="c-dir sortable" data-sort="d">Папка<span class="ar"></span></th>
+            <th class="c-type sortable" data-sort="t">Вид документа<span class="ar"></span></th>
+            <th class="c-desc sortable" data-sort="s">Описание<span class="ar"></span></th>
+            <th class="c-mod sortable" data-sort="mt">Изменён<span class="ar"></span></th>
+            <th class="c-size sortable" data-sort="z">Размер<span class="ar"></span></th>
+            <th class="c-ext sortable" data-sort="e">Тип<span class="ar"></span></th>
+          </tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <div class="empty" id="empty" hidden></div>
+        <div class="more" id="more" hidden></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="selbar" id="selbar">
+  <span>Выбрано файлов: <strong id="selN">0</strong></span>
+  <button class="btn primary" id="btnAssign">Метка…</button>
+  <button class="btn" id="btnUnsel">Снять выделение</button>
+</div>
+<div class="veil" id="veil"><div class="dlg" id="dlg"></div></div>
+<div class="toast" id="toast"></div>
+
 <script>
 var CATALOG = /*__CATALOG_DATA__*/null;
-var SAVED_LABELS = /*__CATALOG_LABELS__*/null;
-document.body.appendChild(document.createTextNode('Файлов: ' + (CATALOG ? CATALOG.files.length : 0)));
-</script></body></html>
+var CATALOG_LABELS = /*__CATALOG_LABELS__*/null;
+</script>
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var el = function (tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  var coll = new Intl.Collator('ru', { numeric: true, sensitivity: 'base' });
+  var data = CATALOG && CATALOG.files ? CATALOG : { built: '', root: '', review: 'На разбор', files: [] };
+  var files = data.files;
+  var byId = {};
+  var VIEWABLE = { pdf: 1, png: 1, jpg: 1, jpeg: 1, gif: 1, bmp: 1, webp: 1, svg: 1, txt: 1, html: 1, htm: 1 };
+  var STATE = { dsp: 'ДСП, не анализировался', protected: 'защищён паролем', locked: 'был занят другой программой', unit: 'часть папки, хранится целиком', review: 'на разбор' };
+  var COLORS = [['Красный', '#ff453a'], ['Оранжевый', '#ff9f0a'], ['Жёлтый', '#ffd60a'], ['Зелёный', '#30d158'], ['Синий', '#0a84ff'], ['Фиолетовый', '#bf5af2'], ['Серый', '#8e8e93']];
+  var PAGE = 150;
+
+  // ---------------------------------------------------------------- подготовка данных
+  var now = Date.now();
+  var dupIds = {};
+  files.forEach(function (f) {
+    byId[f.id] = f;
+    if (!f.k) f.k = []; else if (!Array.isArray(f.k)) f.k = [String(f.k)];
+    f.h = [f.n, f.o, f.d, f.t, f.s, f.k.join(' '), f.c, f.v, f.dd, f.dn, f.e, f.nt, f.w].join('\n').toLowerCase();
+  });
+  files.forEach(function (f) { if (f.du && byId[f.du]) { dupIds[f.id] = f.du; dupIds[f.du] = f.du; } });
+
+  // ---------------------------------------------------------------- метки
+  var LS_KEY = 'desktopCatalog.labels.v1:' + (data.root || '');
+  var SAVED_KEY = LS_KEY + ':saved';
+  var storageOk = true;
+  function normStore(s) {
+    var out = { version: 1, updated: 0, labels: [], files: {} };
+    if (!s || typeof s !== 'object') return out;
+    out.updated = Number(s.updated) || 0;
+    var labs = s.labels;
+    if (labs && !Array.isArray(labs)) labs = [labs];
+    (labs || []).forEach(function (l) {
+      if (l && l.id && l.name) out.labels.push({ id: String(l.id), name: String(l.name), color: /^#[0-9a-fA-F]{6}$/.test(l.color) ? l.color : '#8e8e93' });
+    });
+    var known = {};
+    out.labels.forEach(function (l) { known[l.id] = 1; });
+    var fl = s.files || {};
+    Object.keys(fl).forEach(function (id) {
+      var a = fl[id];
+      if (a == null) return;
+      if (!Array.isArray(a)) a = [a];
+      var seen = {};
+      a = a.map(String).filter(function (x) { if (!known[x] || seen[x]) return false; seen[x] = 1; return true; });
+      if (a.length) out.files[id] = a;
+    });
+    return out;
+  }
+  function loadLocal() {
+    try { var t = window.localStorage.getItem(LS_KEY); return t ? normStore(JSON.parse(t)) : null; }
+    catch (e) { storageOk = false; return null; }
+  }
+  if (typeof CATALOG_LABELS === 'string') { try { CATALOG_LABELS = JSON.parse(CATALOG_LABELS); } catch (e) { CATALOG_LABELS = null; } }
+  var embedded = CATALOG_LABELS ? normStore(CATALOG_LABELS) : null;
+  var local = loadLocal();
+  var store;
+  if (local && (!embedded || local.updated >= embedded.updated)) store = local;
+  else if (embedded) store = embedded;
+  else store = normStore(null);
+  var savedStamp = 0;
+  try { savedStamp = Number(window.localStorage.getItem(SAVED_KEY)) || 0; } catch (e) { }
+  if (embedded && embedded.updated > savedStamp) savedStamp = embedded.updated;
+  var labelById = {};
+  function reindexLabels() { labelById = {}; store.labels.forEach(function (l) { labelById[l.id] = l; }); }
+  reindexLabels();
+  function persist() {
+    store.updated = Date.now();
+    try { window.localStorage.setItem(LS_KEY, JSON.stringify(store)); } catch (e) { storageOk = false; }
+    refreshSaveBtn();
+  }
+  function unsaved() { return store.updated > savedStamp; }
+  function refreshSaveBtn() {
+    var b = $('btnSave');
+    b.textContent = '';
+    if (unsaved()) { b.appendChild(el('span', 'dot')); b.appendChild(document.createTextNode('Сохранить метки в файл')); b.classList.add('warn'); }
+    else { b.textContent = 'Сохранить метки в файл'; b.classList.remove('warn'); }
+  }
+  function fileLabels(id) { return store.files[id] || []; }
+  function newId() { return 'l' + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36); }
+  function ensureDefaults() {
+    if (store.labels.length) return;
+    COLORS.forEach(function (c) { store.labels.push({ id: newId(), name: c[0], color: c[1] }); });
+    reindexLabels();
+  }
+  function labelCounts() {
+    var n = {};
+    Object.keys(store.files).forEach(function (id) { if (byId[id]) store.files[id].forEach(function (l) { n[l] = (n[l] || 0) + 1; }); });
+    return n;
+  }
+
+  // ---------------------------------------------------------------- состояние экрана
+  var S = { q: '', list: 'all', dir: null, ext: '', type: '', label: '', from: '', to: '', sort: 'mt', asc: false };
+  var view = [];
+  var shown = 0;
+  var selected = {};
+  var openId = null;
+  var tokens = [];
+
+  function fmtSize(z) {
+    if (z == null) return '';
+    if (z < 1024) return z + ' Б';
+    if (z < 1048576) return (z / 1024).toFixed(z < 10240 ? 1 : 0).replace('.', ',') + ' КБ';
+    if (z < 1073741824) return (z / 1048576).toFixed(1).replace('.', ',') + ' МБ';
+    return (z / 1073741824).toFixed(2).replace('.', ',') + ' ГБ';
+  }
+  function fmtDate(s) {
+    if (!s) return '';
+    var m = /^(\d{4})-(\d{2})-(\d{2})(?: (\d{2}:\d{2}))?/.exec(s);
+    return m ? m[3] + '.' + m[2] + '.' + m[1] + (m[4] ? ' ' + m[4] : '') : s;
+  }
+  function dirOf(p) { var i = Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/')); return i > 0 ? p.substring(0, i) : p; }
+  function relHref(f) {
+    var parts = (f.d ? f.d.split('\\') : []).concat([f.n]);
+    return parts.map(encodeURIComponent).join('/');
+  }
+
+  // ---------------------------------------------------------------- отбор и сортировка
+  function applyFilters() {
+    tokens = S.q.toLowerCase().split(/\s+/).filter(Boolean);
+    var from = S.from ? new Date(S.from + 'T00:00:00').getTime() : null;
+    var to = S.to ? new Date(S.to + 'T23:59:59').getTime() : null;
+    var week = now - 7 * 86400000;
+    var dirPrefix = S.dir ? S.dir.toLowerCase() + '\\' : null;
+    var dirExact = S.dir != null ? S.dir.toLowerCase() : null;
+    view = files.filter(function (f) {
+      if (S.list === 'week' && !(f.mt >= week)) return false;
+      if (S.list === 'review' && f.st !== 'review') return false;
+      if (S.list === 'dups' && !dupIds[f.id]) return false;
+      if (dirExact != null) {
+        var d = (f.d || '').toLowerCase();
+        if (dirExact === '') { /* корень: все файлы */ }
+        else if (d !== dirExact && d.indexOf(dirPrefix) !== 0) return false;
+      }
+      if (S.ext && f.e !== S.ext) return false;
+      if (S.type && (f.t || '') !== S.type) return false;
+      if (S.label) {
+        var ls = fileLabels(f.id);
+        if (S.label === '-') { if (ls.length) return false; }
+        else if (ls.indexOf(S.label) < 0) return false;
+      }
+      if (from != null && !(f.mt >= from)) return false;
+      if (to != null && !(f.mt <= to)) return false;
+      for (var i = 0; i < tokens.length; i++) {
+        if (f.h.indexOf(tokens[i]) >= 0) continue;
+        var ls2 = fileLabels(f.id), hit = false;
+        for (var j = 0; j < ls2.length; j++) { var l = labelById[ls2[j]]; if (l && l.name.toLowerCase().indexOf(tokens[i]) >= 0) { hit = true; break; } }
+        if (!hit) return false;
+      }
+      return true;
+    });
+    sortView();
+  }
+  function sortView() {
+    var k = S.sort, dir = S.asc ? 1 : -1;
+    var num = (k === 'mt' || k === 'z');
+    view.sort(function (a, b) {
+      var r;
+      if (S.list === 'dups' && k === 'mt' && !S.asc) {
+        // дубликаты показываются группами: одинаковые файлы рядом
+        r = coll.compare(dupIds[a.id] || '', dupIds[b.id] || '');
+        if (r) return r;
+        r = (a.du ? 1 : 0) - (b.du ? 1 : 0);
+        if (r) return r;
+      }
+      if (num) r = ((a[k] || 0) - (b[k] || 0)) * dir;
+      else {
+        var x = a[k] || '', y = b[k] || '';
+        if (!x && y) return 1; if (x && !y) return -1;
+        r = coll.compare(x, y) * dir;
+      }
+      return r || coll.compare(a.n, b.n);
+    });
+  }
+
+  // ---------------------------------------------------------------- отрисовка таблицы
+  function hl(text) {
+    var frag = document.createDocumentFragment();
+    if (!text) return frag;
+    if (!tokens.length) { frag.appendChild(document.createTextNode(text)); return frag; }
+    var low = text.toLowerCase(), marks = [];
+    tokens.forEach(function (t) { var i = 0; while ((i = low.indexOf(t, i)) >= 0) { marks.push([i, i + t.length]); i += t.length; } });
+    if (!marks.length) { frag.appendChild(document.createTextNode(text)); return frag; }
+    marks.sort(function (a, b) { return a[0] - b[0]; });
+    var pos = 0;
+    marks.forEach(function (m) {
+      if (m[1] <= pos) return;
+      var s = Math.max(m[0], pos);
+      if (s > pos) frag.appendChild(document.createTextNode(text.substring(pos, s)));
+      frag.appendChild(el('mark', null, text.substring(s, m[1])));
+      pos = m[1];
+    });
+    if (pos < text.length) frag.appendChild(document.createTextNode(text.substring(pos)));
+    return frag;
+  }
+  function pill(l) { var p = el('span', 'pill'); var d = el('span', 'ldot'); d.style.background = l.color; p.appendChild(d); p.appendChild(document.createTextNode(l.name)); return p; }
+  function badgesFor(f) {
+    var box = el('div', 'badges');
+    if (f.st === 'dsp') box.appendChild(el('span', 'badge b-dsp', 'ДСП'));
+    if (f.st === 'protected') box.appendChild(el('span', 'badge b-protected', 'с паролем'));
+    if (f.st === 'locked') box.appendChild(el('span', 'badge', 'был занят'));
+    if (f.st === 'unit') box.appendChild(el('span', 'badge', 'часть папки'));
+    if (f.st === 'review') box.appendChild(el('span', 'badge', 'на разбор'));
+    if (f.du) box.appendChild(el('span', 'badge', 'дубликат'));
+    else if (dupIds[f.id]) box.appendChild(el('span', 'badge', 'есть дубликаты'));
+    if (f.w && f.w.indexOf('ключевые слова') === 0) box.appendChild(el('span', 'badge', 'по ключевым словам'));
+    fileLabels(f.id).forEach(function (id) { if (labelById[id]) box.appendChild(pill(labelById[id])); });
+    return box;
+  }
+  function rowFor(f) {
+    var tr = el('tr', 'row' + (selected[f.id] ? ' sel' : ''));
+    tr.dataset.id = f.id;
+    var td = el('td', 'c-chk');
+    var cb = el('input'); cb.type = 'checkbox'; cb.checked = !!selected[f.id]; cb.className = 'rowchk'; cb.setAttribute('aria-label', 'Выбрать файл');
+    td.appendChild(cb); tr.appendChild(td);
+    td = el('td');
+    var b = el('button', 'fname'); b.appendChild(hl(f.n)); b.title = 'Показать подробности'; td.appendChild(b);
+    if (f.o && f.o !== f.n) { var o = el('div', 'orig'); o.appendChild(document.createTextNode('было: ')); o.appendChild(hl(f.o)); td.appendChild(o); }
+    var bg = badgesFor(f); if (bg.childNodes.length) td.appendChild(bg);
+    tr.appendChild(td);
+    td = el('td', 'dir'); td.appendChild(hl(f.d || '(корень рабочего стола)')); tr.appendChild(td);
+    td = el('td'); td.appendChild(hl(f.t || '')); tr.appendChild(td);
+    td = el('td'); var ds = el('div', 'desc'); ds.appendChild(hl(f.s || f.nt || '')); td.appendChild(ds); tr.appendChild(td);
+    tr.appendChild(el('td', 'c-mod', fmtDate(f.m)));
+    tr.appendChild(el('td', 'c-size', fmtSize(f.z)));
+    tr.appendChild(el('td', 'c-ext', f.e || ''));
+    return tr;
+  }
+  function addKv(dl, k, v) {
+    if (v == null || v === '') return;
+    dl.appendChild(el('dt', null, k));
+    var dd = el('dd');
+    if (v instanceof Node) dd.appendChild(v); else dd.textContent = v;
+    dl.appendChild(dd);
+  }
+  function detailFor(f) {
+    var tr = el('tr', 'det'); tr.dataset.det = f.id;
+    var td = el('td'); td.colSpan = 8;
+    var dl = el('dl', 'kv');
+    addKv(dl, 'Текущее имя', f.n);
+    if (f.o && f.o !== f.n) addKv(dl, 'Исходное имя', f.o);
+    addKv(dl, 'Папка', f.d || '(корень рабочего стола)');
+    addKv(dl, 'Полный путь', f.p);
+    addKv(dl, 'Вид документа', f.t);
+    addKv(dl, 'Описание', f.s);
+    addKv(dl, 'Ключевые слова', f.k.join(', '));
+    addKv(dl, 'Контрагент', f.c);
+    addKv(dl, 'Судно', f.v);
+    addKv(dl, 'Дата документа', f.dd);
+    addKv(dl, 'Номер документа', f.dn);
+    addKv(dl, 'Тип файла и размер', (f.e ? '.' + f.e : 'без расширения') + ', ' + fmtSize(f.z));
+    addKv(dl, 'Создан', fmtDate(f.cr));
+    addKv(dl, 'Изменён', fmtDate(f.m));
+    addKv(dl, 'Обработан программой', fmtDate(f.pr));
+    addKv(dl, 'Как определена папка', f.w);
+    if (f.u != null) addKv(dl, 'Уверенность', String(f.u).replace('.', ','));
+    if (f.st) addKv(dl, 'Состояние', STATE[f.st] || f.st);
+    if (f.du && byId[f.du]) addKv(dl, 'Дубликат файла', byId[f.du].n + ' — ' + (byId[f.du].d || 'корень рабочего стола'));
+    else if (dupIds[f.id]) {
+      var copies = files.filter(function (x) { return x.du === f.id; }).map(function (x) { return x.n + ' — ' + (x.d || 'корень рабочего стола'); });
+      addKv(dl, 'Копии этого файла', copies.join('; '));
+    }
+    addKv(dl, 'Примечание', f.nt);
+    var ls = fileLabels(f.id);
+    if (ls.length) { var box = el('span', 'badges'); ls.forEach(function (id) { if (labelById[id]) box.appendChild(pill(labelById[id])); }); addKv(dl, 'Метки', box); }
+    td.appendChild(dl);
+    var acts = el('div', 'acts');
+    var b1 = el('button', 'btn', 'Копировать путь к файлу'); b1.dataset.copy = f.p; acts.appendChild(b1);
+    var b2 = el('button', 'btn', 'Копировать путь к папке'); b2.dataset.copy = dirOf(f.p); acts.appendChild(b2);
+    var b3 = el('button', 'btn', 'Метки файла…'); b3.dataset.assign = f.id; acts.appendChild(b3);
+    if (VIEWABLE[f.e] && f.st !== 'dsp') {
+      var a = el('a', 'btn', 'Открыть в браузере'); a.href = relHref(f); a.target = '_blank'; a.rel = 'noopener'; acts.appendChild(a);
+    } else {
+      acts.appendChild(el('span', 'hint', 'Чтобы открыть файл, скопируйте путь и вставьте его в Проводник или в окно «Открыть».'));
+    }
+    td.appendChild(acts);
+    tr.appendChild(td);
+    return tr;
+  }
+  function renderMore() {
+    var tb = $('rows'), frag = document.createDocumentFragment();
+    var end = Math.min(view.length, shown + PAGE);
+    for (var i = shown; i < end; i++) {
+      frag.appendChild(rowFor(view[i]));
+      if (view[i].id === openId) frag.appendChild(detailFor(view[i]));
+    }
+    tb.appendChild(frag);
+    shown = end;
+    var more = $('more');
+    if (shown < view.length) { more.hidden = false; more.textContent = 'Показано ' + shown + ' из ' + view.length + '. Прокрутите ниже, чтобы увидеть остальные.'; }
+    else more.hidden = true;
+  }
+  function render() {
+    applyFilters();
+    $('rows').textContent = '';
+    shown = 0;
+    $('wrap').scrollTop = 0;
+    var empty = $('empty');
+    if (!files.length) { empty.hidden = false; empty.textContent = 'Каталог пока пуст. Запустите программу разбора: режим «Только обновление каталога» или «Полный разбор».'; }
+    else if (!view.length) { empty.hidden = false; empty.textContent = 'Ничего не найдено. Измените запрос или сбросьте фильтры.'; }
+    else empty.hidden = true;
+    renderMore();
+    var f = $('found');
+    f.textContent = '';
+    f.appendChild(document.createTextNode('Найдено: '));
+    f.appendChild(el('strong', null, String(view.length)));
+    f.appendChild(document.createTextNode(' из ' + files.length + (S.dir ? ' · папка «' + S.dir + '»' : '')));
+    document.querySelectorAll('thead th.sortable').forEach(function (th) {
+      th.querySelector('.ar').textContent = th.dataset.sort === S.sort ? (S.asc ? '▲' : '▼') : '';
+    });
+    document.querySelectorAll('.chip[data-list]').forEach(function (c) { c.classList.toggle('on', c.dataset.list === S.list); });
+    refreshSel();
+  }
+  $('wrap').addEventListener('scroll', function () {
+    var w = this;
+    if (shown < view.length && w.scrollTop + w.clientHeight > w.scrollHeight - 600) renderMore();
+  });
+
+  // ---------------------------------------------------------------- дерево папок
+  var treeRoot = { name: 'Рабочий стол', path: '', kids: {}, n: 0 };
+  var expanded = { '': true };
+  files.forEach(function (f) {
+    treeRoot.n++;
+    if (!f.d) return;
+    var node = treeRoot, path = '';
+    f.d.split('\\').forEach(function (seg) {
+      path = path ? path + '\\' + seg : seg;
+      if (!node.kids[seg]) node.kids[seg] = { name: seg, path: path, kids: {}, n: 0 };
+      node = node.kids[seg]; node.n++;
+    });
+  });
+  function renderTree() {
+    var ul = $('tree'); ul.textContent = '';
+    function add(parent, node, isRoot) {
+      var li = el('li');
+      var row = el('div', 'node' + ((S.dir === node.path) || (isRoot && S.dir == null) ? ' on' : ''));
+      var names = Object.keys(node.kids).sort(coll.compare);
+      var tw = el('button', 'tw' + (names.length ? '' : ' leaf'), expanded[node.path] ? '▾' : '▸');
+      tw.dataset.toggle = node.path; tw.setAttribute('aria-label', 'Развернуть папку');
+      var nm = el('button', 'nm', node.name); nm.dataset.dir = isRoot ? '*' : node.path; nm.title = node.path || 'Все папки';
+      row.appendChild(tw); row.appendChild(nm); row.appendChild(el('span', 'cnt', String(node.n)));
+      li.appendChild(row);
+      if (names.length && expanded[node.path]) {
+        var sub = el('ul');
+        names.forEach(function (k) { add(sub, node.kids[k], false); });
+        li.appendChild(sub);
+      }
+      parent.appendChild(li);
+    }
+    add(ul, treeRoot, true);
+  }
+  $('tree').addEventListener('click', function (e) {
+    var t = e.target;
+    if (t.dataset.toggle != null) { expanded[t.dataset.toggle] = !expanded[t.dataset.toggle]; renderTree(); return; }
+    if (t.dataset.dir != null) {
+      S.dir = t.dataset.dir === '*' ? null : t.dataset.dir;
+      if (S.dir) expanded[S.dir] = true;
+      renderTree(); render();
+    }
+  });
+
+  // ---------------------------------------------------------------- списки фильтров
+  function fillSelect(sel, items, first) {
+    var cur = sel.value; sel.textContent = '';
+    var o = el('option', null, first); o.value = ''; sel.appendChild(o);
+    items.forEach(function (it) { var x = el('option', null, it[1]); x.value = it[0]; sel.appendChild(x); });
+    sel.value = cur; if (sel.value !== cur) sel.value = '';
+  }
+  function countBy(key) {
+    var m = {};
+    files.forEach(function (f) { var v = f[key] || ''; if (v) m[v] = (m[v] || 0) + 1; });
+    return Object.keys(m).sort(coll.compare).map(function (k) { return [k, k + ' (' + m[k] + ')']; });
+  }
+  function renderLabelUi() {
+    var counts = labelCounts();
+    var items = store.labels.map(function (l) { return [l.id, l.name + ' (' + (counts[l.id] || 0) + ')']; });
+    items.unshift(['-', 'Без меток']);
+    fillSelect($('fLabel'), items, 'Все');
+    if (S.label && S.label !== '-' && !labelById[S.label]) S.label = '';
+    $('fLabel').value = S.label;
+    var box = $('labelList'); box.textContent = '';
+    if (!store.labels.length) { box.appendChild(el('div', 'hint', 'Меток пока нет. Отметьте файлы флажками и нажмите «Метка…».')); return; }
+    store.labels.forEach(function (l) {
+      var b = el('button', 'lab-row' + (S.label === l.id ? ' on' : '')); b.dataset.label = l.id;
+      var d = el('span', 'ldot'); d.style.background = l.color; b.appendChild(d);
+      b.appendChild(el('span', 'nm2', l.name)); b.appendChild(el('span', 'cnt', String(counts[l.id] || 0)));
+      box.appendChild(b);
+    });
+  }
+  $('labelList').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-label]'); if (!b) return;
+    S.label = S.label === b.dataset.label ? '' : b.dataset.label;
+    renderLabelUi(); render();
+  });
+
+  // ---------------------------------------------------------------- выделение и метки
+  function selIds() { return Object.keys(selected); }
+  function refreshSel() {
+    var n = selIds().length;
+    $('selN').textContent = n;
+    $('selbar').classList.toggle('show', n > 0);
+    var all = view.length > 0 && view.every(function (f) { return selected[f.id]; });
+    $('chkAll').checked = all;
+    $('chkAll').indeterminate = !all && n > 0;
+  }
+  $('chkAll').addEventListener('change', function () {
+    var on = this.checked;
+    view.forEach(function (f) { if (on) selected[f.id] = 1; else delete selected[f.id]; });
+    document.querySelectorAll('#rows tr.row').forEach(function (tr) { tr.classList.toggle('sel', on); tr.querySelector('.rowchk').checked = on; });
+    refreshSel();
+  });
+  $('btnUnsel').addEventListener('click', function () {
+    selected = {};
+    document.querySelectorAll('#rows tr.row.sel').forEach(function (tr) { tr.classList.remove('sel'); tr.querySelector('.rowchk').checked = false; });
+    refreshSel();
+  });
+  function redrawRow(id) {
+    var tr = document.querySelector('#rows tr.row[data-id="' + id + '"]'); if (!tr) return;
+    var f = byId[id], fresh = rowFor(f);
+    tr.parentNode.replaceChild(fresh, tr);
+    var det = document.querySelector('#rows tr.det[data-det="' + id + '"]');
+    if (det) det.parentNode.replaceChild(detailFor(f), det);
+  }
+  var pop = null;
+  function closePop() { if (pop) { pop.remove(); pop = null; } }
+  function openAssign(anchor, ids) {
+    closePop(); ensureDefaults();
+    pop = el('div', 'pop');
+    function build() {
+      pop.textContent = '';
+      store.labels.forEach(function (l) {
+        var have = ids.filter(function (id) { return fileLabels(id).indexOf(l.id) >= 0; }).length;
+        var b = el('button', 'it'); b.dataset.lab = l.id;
+        b.appendChild(el('span', 'st', have === ids.length ? '✓' : (have ? '–' : '')));
+        var d = el('span', 'ldot'); d.style.background = l.color; b.appendChild(d);
+        b.appendChild(document.createTextNode(l.name));
+        pop.appendChild(b);
+      });
+      pop.appendChild(el('hr'));
+      var m = el('button', 'it', 'Создать или изменить метки…'); m.dataset.manage = '1'; pop.appendChild(m);
+    }
+    build();
+    pop.addEventListener('click', function (e) {
+      e.stopPropagation();   // список перерисовывается, поэтому щелчок не должен дойти до обработчика «закрыть при щелчке мимо»
+      var b = e.target.closest('button.it'); if (!b) return;
+      if (b.dataset.manage) { closePop(); openManager(); return; }
+      var lab = b.dataset.lab;
+      var all = ids.every(function (id) { return fileLabels(id).indexOf(lab) >= 0; });
+      ids.forEach(function (id) {
+        var a = (store.files[id] || []).slice(), i = a.indexOf(lab);
+        if (all) { if (i >= 0) a.splice(i, 1); } else if (i < 0) a.push(lab);
+        if (a.length) store.files[id] = a; else delete store.files[id];
+      });
+      persist(); build(); ids.forEach(redrawRow); renderLabelUi();
+    });
+    document.body.appendChild(pop);
+    var r = anchor.getBoundingClientRect();
+    var top = r.top - pop.offsetHeight - 8; if (top < 8) top = Math.min(r.bottom + 8, window.innerHeight - pop.offsetHeight - 8);
+    pop.style.top = Math.max(8, top) + 'px';
+    pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 8)) + 'px';
+  }
+  $('btnAssign').addEventListener('click', function (e) { e.stopPropagation(); if (pop) closePop(); else openAssign(this, selIds()); });
+  document.addEventListener('click', function (e) { if (pop && !pop.contains(e.target)) closePop(); });
+
+  $('rows').addEventListener('click', function (e) {
+    var t = e.target;
+    var tr = t.closest('tr'); if (!tr) return;
+    if (t.classList.contains('rowchk')) {
+      var id = tr.dataset.id;
+      if (t.checked) selected[id] = 1; else delete selected[id];
+      tr.classList.toggle('sel', t.checked); refreshSel(); return;
+    }
+    if (t.dataset.copy != null) { copyText(t.dataset.copy); return; }
+    if (t.dataset.assign) { e.stopPropagation(); openAssign(t, [t.dataset.assign]); return; }
+    if (t.closest('.fname')) {
+      var fid = tr.dataset.id;
+      var old = document.querySelector('#rows tr.det'); var was = old ? old.dataset.det : null;
+      if (old) old.remove();
+      if (was === fid) { openId = null; return; }
+      openId = fid;
+      tr.parentNode.insertBefore(detailFor(byId[fid]), tr.nextSibling);
+    }
+  });
+
+  // ---------------------------------------------------------------- окна
+  function openDlg(build) { var d = $('dlg'); d.textContent = ''; build(d); $('veil').classList.add('show'); }
+  function closeDlg() { $('veil').classList.remove('show'); }
+  $('veil').addEventListener('mousedown', function (e) { if (e.target === this) closeDlg(); });
+  var toastTimer = null;
+  function toast(msg) { var t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.classList.remove('show'); }, 4200); }
+
+  function openManager() {
+    ensureDefaults();
+    openDlg(function (d) {
+      d.appendChild(el('h3', null, 'Метки'));
+      d.appendChild(el('p', 'hint', 'Название и цвет можно менять. При удалении метка снимается со всех файлов, сами файлы не затрагиваются.'));
+      var list = el('div'); d.appendChild(list);
+      function draw() {
+        list.textContent = '';
+        var counts = labelCounts();
+        store.labels.forEach(function (l) {
+          var r = el('div', 'lrow');
+          var c = el('input'); c.type = 'color'; c.value = l.color; c.title = 'Цвет метки';
+          c.addEventListener('change', function () { l.color = c.value; changed(); });
+          var n = el('input'); n.type = 'text'; n.value = l.name; n.maxLength = 40; n.setAttribute('aria-label', 'Название метки');
+          n.addEventListener('change', function () { var v = n.value.trim(); if (v) { l.name = v; changed(); } else n.value = l.name; });
+          var x = el('button', 'btn', 'Удалить');
+          x.addEventListener('click', function () {
+            var k = counts[l.id] || 0;
+            if (k && !window.confirm('Метка «' + l.name + '» стоит на файлах: ' + k + '. Удалить метку?')) return;
+            store.labels = store.labels.filter(function (q) { return q.id !== l.id; });
+            Object.keys(store.files).forEach(function (id) {
+              var a = store.files[id].filter(function (q) { return q !== l.id; });
+              if (a.length) store.files[id] = a; else delete store.files[id];
+            });
+            reindexLabels(); changed(); draw();
+          });
+          r.appendChild(c); r.appendChild(n); r.appendChild(el('span', 'n', 'файлов: ' + (counts[l.id] || 0))); r.appendChild(x);
+          list.appendChild(r);
+        });
+      }
+      function changed() { persist(); renderLabelUi(); render(); }
+      draw();
+      d.appendChild(el('h3', null, 'Новая метка')).style.marginTop = '16px';
+      var nr = el('div', 'lrow');
+      var nn = el('input'); nn.type = 'text'; nn.placeholder = 'Название, например «Срочно»'; nn.maxLength = 40;
+      var sw = el('div', 'swatches'); var pick = COLORS[4][1];
+      COLORS.forEach(function (c) {
+        var b = el('button', c[1] === pick ? 'on' : ''); b.style.background = c[1]; b.title = c[0];
+        b.addEventListener('click', function () { pick = c[1]; sw.querySelectorAll('button').forEach(function (q) { q.classList.remove('on'); }); b.classList.add('on'); });
+        sw.appendChild(b);
+      });
+      var add = el('button', 'btn primary', 'Создать');
+      function create() {
+        var v = nn.value.trim(); if (!v) { nn.focus(); return; }
+        store.labels.push({ id: newId(), name: v, color: pick }); reindexLabels(); nn.value = ''; changed(); draw();
+      }
+      add.addEventListener('click', create);
+      nn.addEventListener('keydown', function (e) { if (e.key === 'Enter') create(); });
+      nr.appendChild(nn); nr.appendChild(sw); nr.appendChild(add); d.appendChild(nr);
+      var foot = el('div', 'foot');
+      var ex = el('button', 'btn', 'Экспорт в файл JSON'); ex.addEventListener('click', function () { download('catalog-labels-' + dayStamp() + '.json', JSON.stringify(store, null, 2), 'application/json'); });
+      var im = el('button', 'btn', 'Импорт из файла JSON'); im.addEventListener('click', function () { importLabels(function () { draw(); }); });
+      var ok = el('button', 'btn primary', 'Готово'); ok.addEventListener('click', closeDlg);
+      foot.appendChild(ex); foot.appendChild(im); foot.appendChild(ok); d.appendChild(foot);
+    });
+  }
+  function importLabels(done) {
+    var inp = el('input'); inp.type = 'file'; inp.accept = '.json,application/json';
+    inp.addEventListener('change', function () {
+      var file = inp.files[0]; if (!file) return;
+      var rd = new FileReader();
+      rd.onload = function () {
+        var obj;
+        try { var txt = String(rd.result); if (txt.charCodeAt(0) === 0xFEFF) txt = txt.substring(1); obj = JSON.parse(txt); } catch (e) { window.alert('Файл не читается: это не файл меток.'); return; }
+        var inc = normStore(obj);
+        if (!inc.labels.length) { window.alert('В файле нет меток.'); return; }
+        var replace = !store.labels.length || window.confirm('Заменить текущие метки метками из файла?\n\nОК — заменить.\nОтмена — добавить метки из файла к текущим.');
+        if (replace) store = inc;
+        else {
+          var map = {};
+          inc.labels.forEach(function (l) {
+            var same = store.labels.filter(function (q) { return q.id === l.id || q.name.toLowerCase() === l.name.toLowerCase(); })[0];
+            if (same) map[l.id] = same.id; else { store.labels.push(l); map[l.id] = l.id; }
+          });
+          Object.keys(inc.files).forEach(function (id) {
+            var a = (store.files[id] || []).slice();
+            inc.files[id].forEach(function (x) { var t = map[x]; if (t && a.indexOf(t) < 0) a.push(t); });
+            if (a.length) store.files[id] = a;
+          });
+        }
+        reindexLabels(); persist(); renderLabelUi(); render(); toast('Метки загружены из файла.'); if (done) done();
+      };
+      rd.readAsText(file, 'utf-8');
+    });
+    inp.click();
+  }
+  $('btnLabels').addEventListener('click', openManager);
+
+  // ---------------------------------------------------------------- сохранение меток в файл
+  function idb(mode, fn) {
+    return new Promise(function (res, rej) {
+      var rq;
+      try { rq = window.indexedDB.open('desktopCatalog', 1); } catch (e) { rej(e); return; }
+      rq.onupgradeneeded = function () { rq.result.createObjectStore('kv'); };
+      rq.onerror = function () { rej(rq.error); };
+      rq.onsuccess = function () {
+        var db = rq.result, tx = db.transaction('kv', mode), st = tx.objectStore('kv'), out;
+        var r = fn(st); if (r) r.onsuccess = function () { out = r.result; };
+        tx.oncomplete = function () { db.close(); res(out); };
+        tx.onerror = function () { db.close(); rej(tx.error); };
+      };
+    });
+  }
+  function markSaved() {
+    savedStamp = store.updated;
+    try { window.localStorage.setItem(SAVED_KEY, String(savedStamp)); } catch (e) { }
+    refreshSaveBtn();
+  }
+  function saveToFile() {
+    if (!store.updated) store.updated = Date.now();
+    var text = JSON.stringify(store, null, 2);
+    if (!window.showSaveFilePicker) {
+      download('labels.json', text, 'application/json'); markSaved();
+      toast('Файл labels.json сохранён в папку «Загрузки». Перенесите его в папку «_Каталог» на рабочем столе.');
+      return;
+    }
+    var handle = null;
+    idb('readonly', function (st) { return st.get(LS_KEY); }).catch(function () { return null; })
+      .then(function (h) {
+        if (!h || !h.requestPermission) return null;
+        return h.requestPermission({ mode: 'readwrite' }).then(function (p) { return p === 'granted' ? h : null; }).catch(function () { return null; });
+      })
+      .then(function (h) {
+        if (h) return h;
+        return window.showSaveFilePicker({ suggestedName: 'labels.json', startIn: 'desktop', types: [{ description: 'Файл меток', accept: { 'application/json': ['.json'] } }] });
+      })
+      .then(function (h) { handle = h; return h.createWritable(); })
+      .then(function (w) { return w.write(text).then(function () { return w.close(); }); })
+      .then(function () {
+        markSaved();
+        idb('readwrite', function (st) { st.put(handle, LS_KEY); }).catch(function () { });
+        toast('Метки записаны в файл «' + handle.name + '».');
+      })
+      .catch(function (e) {
+        if (e && e.name === 'AbortError') return;
+        download('labels.json', text, 'application/json'); markSaved();
+        toast('Записать файл напрямую не удалось. Файл labels.json сохранён в «Загрузки», перенесите его в папку «_Каталог».');
+      });
+  }
+  $('btnSave').addEventListener('click', function () {
+    var first = false;
+    try { first = !window.localStorage.getItem(LS_KEY + ':hint'); window.localStorage.setItem(LS_KEY + ':hint', '1'); } catch (e) { }
+    if (first && window.showSaveFilePicker) {
+      openDlg(function (d) {
+        d.appendChild(el('h3', null, 'Куда сохранить метки'));
+        d.appendChild(el('p', null, 'Сейчас откроется окно сохранения. Зайдите в папку «_Каталог» на рабочем столе и сохраните файл под именем labels.json.'));
+        d.appendChild(el('p', 'hint', 'Программа разбора читает этот файл и при каждой пересборке каталога вставляет метки обратно. В следующий раз браузер запомнит место и спросит только разрешение на запись.'));
+        var foot = el('div', 'foot'); var ok = el('button', 'btn primary', 'Понятно, продолжить');
+        ok.addEventListener('click', function () { closeDlg(); saveToFile(); });
+        foot.appendChild(ok); d.appendChild(foot);
+      });
+    } else saveToFile();
+  });
+
+  // ---------------------------------------------------------------- CSV, буфер обмена, справка
+  function download(name, text, type) {
+    var blob = new Blob([text], { type: (type || 'text/plain') + ';charset=utf-8' });
+    var a = el('a'); a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+  }
+  function dayStamp() { var d = new Date(); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+  function csvCell(v) {
+    v = v == null ? '' : String(v);
+    if (/^[=+\-@\t\r]/.test(v)) v = "'" + v;   // защита от формул при открытии в Excel
+    return /[";\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  }
+  $('btnCsv').addEventListener('click', function () {
+    if (!view.length) { toast('Нет файлов для выгрузки.'); return; }
+    var head = ['Имя', 'Исходное имя', 'Папка', 'Полный путь', 'Вид документа', 'Описание', 'Ключевые слова', 'Контрагент', 'Судно', 'Дата документа', 'Номер документа',
+      'Тип файла', 'Размер, байт', 'Создан', 'Изменён', 'Обработан', 'Как определена папка', 'Уверенность', 'Дубликат файла', 'Метки', 'Состояние', 'Примечание'];
+    var lines = [head.map(csvCell).join(';')];
+    view.forEach(function (f) {
+      var labs = fileLabels(f.id).map(function (id) { return labelById[id] ? labelById[id].name : ''; }).filter(Boolean).join(', ');
+      lines.push([f.n, f.o, f.d, f.p, f.t, f.s, f.k.join(', '), f.c, f.v, f.dd, f.dn, f.e, f.z, f.cr, f.m, f.pr, f.w,
+        f.u == null ? '' : String(f.u).replace('.', ','), f.du && byId[f.du] ? byId[f.du].p : '', labs, STATE[f.st] || '', f.nt].map(csvCell).join(';'));
+    });
+    // Имена выгружаемых файлов пишутся латиницей: имя с русскими буквами браузер может заменить на «download»
+    download('catalog-export-' + dayStamp() + '.csv', String.fromCharCode(0xFEFF) + lines.join('\r\n') + '\r\n', 'text/csv');
+    toast('Выгружено файлов: ' + view.length + '.');
+  });
+  function copyText(text) {
+    function fallback() {
+      var ta = el('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select();
+      var ok = false; try { ok = document.execCommand('copy'); } catch (e) { }
+      ta.remove(); toast(ok ? 'Путь скопирован.' : 'Не удалось скопировать. Выделите путь в строке «Полный путь» и нажмите Ctrl+C.');
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function () { toast('Путь скопирован.'); }, fallback);
+    else fallback();
+  }
+  $('btnHelp').addEventListener('click', function () {
+    openDlg(function (d) {
+      d.appendChild(el('h3', null, 'Как пользоваться каталогом'));
+      [
+        'Поиск ищет сразу по всем сведениям о файле: названию, исходному имени, папке, описанию, ключевым словам, контрагенту, судну, дате и номеру документа, а также по названиям меток. Можно вводить несколько слов — найдутся файлы, где есть все.',
+        'Щелчок по названию файла открывает подробности и кнопки копирования пути. Открыть прямо из каталога можно только то, что браузер показывает сам: PDF, картинки, текст и HTML. Остальные файлы открывайте через Проводник по скопированному пути.',
+        'Щелчок по заголовку столбца сортирует таблицу, повторный щелчок меняет порядок.',
+        'Метки: отметьте файлы флажками и нажмите «Метка…». Одному файлу можно дать несколько меток. Метки привязаны к самому файлу, а не к его месту, поэтому не теряются при переименовании и перемещении.',
+        'Где хранятся метки. Сразу после изменения — в памяти этого браузера на этом компьютере. Кнопка «Сохранить метки в файл» записывает их в файл labels.json в папке «_Каталог»; программа разбора берёт метки оттуда при каждой пересборке каталога. Если не сохранять в файл, метки пропадут при очистке данных браузера и не будут видны в другом браузере или на другом компьютере. Оранжевая точка на кнопке означает, что есть несохранённые изменения.',
+        'Каталог работает без интернета и ничего никуда не отправляет.'
+      ].forEach(function (t) { d.appendChild(el('p', null, t)); });
+      if (!storageOk) d.appendChild(el('p', null, 'Внимание: этот браузер не разрешил хранить данные. Метки сохранятся только до закрытия страницы — пользуйтесь кнопкой «Сохранить метки в файл».')).style.color = 'var(--danger)';
+      var foot = el('div', 'foot'); var ok = el('button', 'btn primary', 'Закрыть'); ok.addEventListener('click', closeDlg); foot.appendChild(ok); d.appendChild(foot);
+    });
+  });
+
+  // ---------------------------------------------------------------- события
+  var qTimer = null;
+  $('q').addEventListener('input', function () {
+    var v = this.value; $('searchBox').classList.toggle('has', !!v);
+    clearTimeout(qTimer); qTimer = setTimeout(function () { S.q = v; render(); }, 90);
+  });
+  $('qClear').addEventListener('click', function () { $('q').value = ''; $('searchBox').classList.remove('has'); S.q = ''; render(); $('q').focus(); });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { if (pop) closePop(); else if ($('veil').classList.contains('show')) closeDlg(); else if ($('q').value) $('qClear').click(); }
+    else if (e.key === '/' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { e.preventDefault(); $('q').focus(); }
+  });
+  document.querySelectorAll('.chip[data-list]').forEach(function (c) { c.addEventListener('click', function () { S.list = c.dataset.list; render(); }); });
+  document.querySelectorAll('thead th.sortable').forEach(function (th) {
+    th.addEventListener('click', function () {
+      var k = th.dataset.sort;
+      if (S.sort === k) S.asc = !S.asc; else { S.sort = k; S.asc = !(k === 'mt' || k === 'z'); }
+      render();
+    });
+  });
+  $('fExt').addEventListener('change', function () { S.ext = this.value; render(); });
+  $('fType').addEventListener('change', function () { S.type = this.value; render(); });
+  $('fLabel').addEventListener('change', function () { S.label = this.value; renderLabelUi(); render(); });
+  $('fFrom').addEventListener('change', function () { S.from = this.value; render(); });
+  $('fTo').addEventListener('change', function () { S.to = this.value; render(); });
+  $('btnReset').addEventListener('click', function () {
+    S.q = ''; S.list = 'all'; S.dir = null; S.ext = ''; S.type = ''; S.label = ''; S.from = ''; S.to = '';
+    $('q').value = ''; $('searchBox').classList.remove('has'); $('fExt').value = ''; $('fType').value = ''; $('fFrom').value = ''; $('fTo').value = '';
+    renderTree(); renderLabelUi(); render();
+  });
+  window.addEventListener('beforeunload', function (e) {
+    if (!storageOk && unsaved()) { e.preventDefault(); e.returnValue = ''; }
+  });
+
+  // ---------------------------------------------------------------- запуск
+  $('built').textContent = data.built ? 'Обновлён ' + fmtDate(data.built) : '';
+  $('nAll').textContent = files.length;
+  $('nWeek').textContent = files.filter(function (f) { return f.mt >= now - 7 * 86400000; }).length;
+  $('nReview').textContent = files.filter(function (f) { return f.st === 'review'; }).length;
+  $('nDups').textContent = Object.keys(dupIds).length;
+  fillSelect($('fExt'), countBy('e').map(function (x) { return [x[0], '.' + x[1]]; }), 'Все');
+  fillSelect($('fType'), countBy('t'), 'Все');
+  renderTree(); renderLabelUi(); refreshSaveBtn(); render();
+})();
+</script>
+</body>
+</html>

@@ -232,7 +232,7 @@ function Invoke-Analysis {
     $busyHash = @{}                                         # содержимое, которое сейчас анализируется
     $deferred = New-Object System.Collections.ArrayList     # копии таких файлов ждут ответа
     $idx = 0; $done = 0; $total = $work.Count
-    $failStreak = 0; $fatal = ''; $stopped = $false
+    $failStreak = 0; $fatal = ''; $fatalStatus = 0; $stopped = $false
     $netStreak = 0; $everOk = $false; $lastNetErr = ''      # попытки подряд без связи с сервисом
     $pauseUntil = Get-Date
     $started = Get-Date
@@ -284,7 +284,7 @@ function Invoke-Analysis {
                 $errText = $r.Message
                 if (-not $r.Network) { $errText = Get-ApiErrorText $r.Status $r.Body }
                 if ($r.Status -eq 401 -or $r.Status -eq 402 -or $r.Status -eq 403 -or $r.Status -eq 404) {
-                    $fatal = $errText
+                    $fatal = $errText; $fatalStatus = $r.Status
                     [void]$retry.Add(@{ Item = $p; NotBefore = (Get-Date) })
                     continue
                 }
@@ -339,8 +339,18 @@ function Invoke-Analysis {
                 if (-not $why -and $netStreak -ge $netLimit) { $why = "нет связи с сервисом, попыток подряд без ответа: $netStreak ($lastNetErr)" }
                 if (-not $why) { $why = 'пять файлов подряд остались без ответа' }
                 Warn "Claude недоступен: $why."
-                if (Ask-YesNo 'Продолжить без Claude, по ключевым словам? Ответ «нет» остановит работу, её можно будет продолжить позже.') {
-                    $useApi = $false; $fatal = ''; $failStreak = 0; $netStreak = 0; $hold = $false
+                # Ключ не принят: его можно сразу ввести заново, отложенные файлы уйдут с новым ключом
+                $again = $false
+                if ($fatalStatus -eq 401 -and -not $script:AutoYes) {
+                    if ($env:ANTHROPIC_API_KEY) { Say 'Ключ взят из переменной среды ANTHROPIC_API_KEY. Исправьте её значение и запустите программу снова.' }
+                    elseif (Ask-YesNo 'Ввести ключ заново?') {
+                        $newKey = Request-ApiKey
+                        if ($newKey) { $script:Api.Key = $newKey; $again = $true }
+                    }
+                }
+                if ($again) { $fatal = ''; $fatalStatus = 0; $failStreak = 0; $netStreak = 0; $hold = $false }
+                elseif (Ask-YesNo 'Продолжить без Claude, по ключевым словам? Ответ «нет» остановит работу, её можно будет продолжить позже.') {
+                    $useApi = $false; $fatal = ''; $fatalStatus = 0; $failStreak = 0; $netStreak = 0; $hold = $false
                     foreach ($x in $retry) {
                         $rec = $x.Item.Rec
                         $an = Get-KeywordAnalysis $rec.name $rec.ext $x.Item.Content.Text 'Claude недоступен' $x.Item.Content.Html
@@ -424,7 +434,8 @@ function Invoke-Analysis {
             # --- 4. Завершение и ожидание
             if ($inflight.Count -eq 0 -and $retry.Count -eq 0 -and $idx -ge $work.Count -and $deferred.Count -eq 0) { break }
             Show-AnalysisStatus $done $total $inflight.Count $started
-            if (((Get-Date) - $lastSave).TotalSeconds -gt 60) { Save-Db; $lastSave = Get-Date }
+            # Ответы Claude сразу пишутся в файл сохранённых ответов, поэтому база сохраняется нечасто
+            if (((Get-Date) - $lastSave).TotalSeconds -gt 180) { Save-Db; $lastSave = Get-Date }
             if (-not $progress) {
                 if ($inflight.Count -gt 0) {
                     $tasks = [Threading.Tasks.Task[]]@($inflight | ForEach-Object { $_.Net.Task })

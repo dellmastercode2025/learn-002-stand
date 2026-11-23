@@ -240,7 +240,9 @@ function Invoke-Apply($rows) {
             [void]$res.Errors.Add("$([string]$r.src): $err")
             Write-Log "  ошибка: $([string]$r.src): $err"
         }
-        if (((Get-Date) - $lastSave).TotalSeconds -gt 30) { Update-DbIndex; Save-Db; $lastSave = Get-Date }
+        # База сохраняется раз в две минуты: на тысячах файлов запись занимает секунды,
+        # а всё выполненное и так уже записано в журнал
+        if (((Get-Date) - $lastSave).TotalSeconds -gt 120) { Update-DbIndex; Save-Db; $lastSave = Get-Date }
     }
     } finally {
         # Если работу прервали, уже выполненные перемещения всё равно попадают в базу
@@ -303,7 +305,7 @@ function Invoke-Rollback {
     Say ''
     Say "Будет отменён запуск от $($run.Time): операций с файлами $files, с папками $dirs."
     if ($runs.Count -gt 1) { Say "После этого можно будет отменить и более ранние запуски (их ещё $($runs.Count - 1))." }
-    if (-not (Ask-YesNo 'Вернуть файлы на прежние места?')) { return $false }
+    if (-not (Ask-YesNo 'Вернуть файлы на прежние места?' $true)) { Say 'Откат не выполнен. Ни один файл не изменён.'; return $false }
 
     $ok = 0; $bad = 0
     $ops = @($run.Ops)

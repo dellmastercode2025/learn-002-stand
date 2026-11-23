@@ -158,19 +158,30 @@ $script:OpSeq = 0
 
 function New-OpId { $script:OpSeq++; return ($script:RunId + '-' + $script:OpSeq.ToString('00000', $script:Inv)) }
 
+$script:JournalWriter = $null
 function Write-Journal([string]$opId, [string]$fileId, [string]$type, [string]$src, [string]$dst, [string]$hash, [string]$status, [string]$err, [string]$rollback, [string]$runId = '') {
+    # Журнал только дописывается. Файл держится открытым, каждая строка сразу сбрасывается на диск:
+    # так запись на сетевой папке идёт в разы быстрее, а при сбое в журнале остаётся всё уже сделанное.
     $p = Get-ServicePath 'Journal'
     if (-not $runId) { $runId = $script:RunId }
-    $text = ''
-    if (-not [IO.File]::Exists($p)) { $text = (Format-CsvLine $script:JournalHead) + "`r`n" }
-    $text += (Format-CsvLine @($runId, $opId, $fileId, $type, $src, $dst, $hash, $status, (Get-NowText), $err, $rollback)) + "`r`n"
-    [IO.File]::AppendAllText($p, $text, $script:Utf8Bom)
+    $line = Format-CsvLine @($runId, $opId, $fileId, $type, $src, $dst, $hash, $status, (Get-NowText), $err, $rollback)
+    if (-not $script:JournalWriter) {
+        $isNew = (-not [IO.File]::Exists($p)) -or ((New-Object IO.FileInfo($p)).Length -eq 0)
+        $script:JournalWriter = New-Object IO.StreamWriter($p, $true, $script:Utf8Bom)
+        $script:JournalWriter.AutoFlush = $true
+        if ($isNew) { $script:JournalWriter.WriteLine((Format-CsvLine $script:JournalHead)) }
+    }
+    $script:JournalWriter.WriteLine($line)
+}
+function Close-Journal {
+    if ($script:JournalWriter) { try { $script:JournalWriter.Dispose() } catch { }; $script:JournalWriter = $null }
 }
 
 function Read-Journal {
     # Возвращает список строк журнала в виде хеш-таблиц
     $res = New-Object System.Collections.ArrayList
     $p = Get-ServicePath 'Journal'
+    Close-Journal
     if (-not [IO.File]::Exists($p)) { return ,@() }
     $first = $true
     foreach ($line in [IO.File]::ReadAllLines($p, [Text.Encoding]::UTF8)) {

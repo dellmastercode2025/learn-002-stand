@@ -11,8 +11,7 @@ param(
     [string]$Root = '',          # папка вместо рабочего стола (нужна для самопроверки)
     [string]$SettingsPath = '',  # другой файл настроек (нужен для самопроверки)
     [string]$ApiUrl = '',        # другой адрес API (нужен для самопроверки)
-    [switch]$Yes,                # отвечать «да» на подтверждения (нужно для самопроверки)
-    [switch]$NoPause
+    [switch]$Yes                 # отвечать «да» на подтверждения (нужно для самопроверки)
 )
 
 Set-StrictMode -Version 2.0
@@ -30,7 +29,6 @@ $script:ApiUrlOverride = $ApiUrl
 $script:RootOverride = $Root
 $script:ModeOverride = $Mode
 $script:SettingsOverride = $SettingsPath
-$script:NoPause      = [bool]$NoPause
 $script:LogPath      = $null
 $script:RunId        = (Get-Date).ToString('yyyyMMdd-HHmmss', $script:Inv)
 $script:ServiceName  = '_Каталог'
@@ -42,7 +40,7 @@ $script:FileNames = @{
     Meta      = 'meta.json'
     Journal   = 'Журнал операций.csv'
     Log       = 'Ход работы.log'
-    PlanJson  = 'plan.json'
+    PlanJson  = 'plan.jsonl'
     PlanHtml  = 'План разбора.html'
     PlanXlsx  = 'План разбора.xlsx'
     PlanCsv   = 'План разбора.csv'

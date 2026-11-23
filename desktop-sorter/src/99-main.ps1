@@ -85,13 +85,13 @@ function Invoke-ApplyStage {
     if ($plan.Edited -gt 0) { Say ("  Учтено ваших правок из файла «{0}»: {1}." -f $plan.Source, $plan.Edited) }
     foreach ($r in $plan.Rejected) { Warn $r }
     if ($todo.Count -eq 0) { Say 'В плане нет операций, применять нечего.'; return $false }
-    if (-not (Ask-YesNo ("Применить план: переместить и переименовать файлов - {0}?" -f $todo.Count))) {
+    if (-not (Ask-YesNo ("Применить план: переместить и переименовать файлов - {0}?" -f $todo.Count) $true)) {
         Say 'План не применён. Ни один файл не изменён.'
         return $false
     }
     Say 'Шаг 5. Выполнение плана…'
     $res = Invoke-Apply $plan.Rows
-    try { [IO.File]::Move((Get-ServicePath 'PlanJson'), ([IO.Path]::Combine($script:ServiceDir, ('plan-' + $script:RunId + '-выполнен.json')))) } catch { }
+    try { [IO.File]::Move((Get-ServicePath 'PlanJson'), ([IO.Path]::Combine($script:ServiceDir, ('plan-' + $script:RunId + '-выполнен.jsonl')))) } catch { }
     $script:LastApply = $res
     $review = @($plan.Rows | Where-Object { $_.action -ne 'нет' -and [string]::Equals([string]$_.dstDir, $script:Cfg.ReviewFolder, [StringComparison]::OrdinalIgnoreCase) }).Count
     Say ''
@@ -196,7 +196,9 @@ function Start-Main {
     } finally {
         try { Stop-OfficeWorker } catch { }
         Remove-TempDir
+        Close-Journal
         Exit-RunLock
+        Close-Log
     }
     return $code
 }

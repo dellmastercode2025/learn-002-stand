@@ -69,9 +69,15 @@ function Read-LabelsJson {
     if (-not [IO.File]::Exists($p)) { return 'null' }
     try {
         $text = (Read-TextFile $p).Trim()
-        $h = ConvertFrom-JsonText $text
-        if (-not ($h -is [System.Collections.IDictionary])) { throw 'неверный формат' }
-        return (ConvertTo-JsonText $h)
+        if ($text.Length -gt 0 -and [int]$text[0] -eq 0xFEFF) { $text = $text.Substring(1) }
+        # Проверка формата. Очень большой файл PowerShell 5.1 разобрать не может, его проверит сама страница.
+        if ($text.Length -lt 1500000) {
+            $h = ConvertFrom-JsonText $text
+            if (-not ($h -is [System.Collections.IDictionary])) { throw 'неверный формат' }
+        } elseif (-not $text.StartsWith('{')) { throw 'неверный формат' }
+        # Файл вставляется в страницу целиком, как строка: страница разбирает его сама,
+        # поэтому списки меток доходят без искажений, а ошибка в файле не ломает каталог
+        return (ConvertTo-JsonText $text)
     } catch {
         Warn ('Файл меток labels.json не прочитан и в каталог не попал: ' + (Get-ErrText $_))
         return 'null'

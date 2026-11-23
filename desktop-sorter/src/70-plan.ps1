@@ -175,8 +175,12 @@ function Resolve-TargetName([string]$dstDir, [string]$base, [string]$stamp, [str
     $maxPath = Get-OptInt 'МаксДлинаПути'
     $tail = ''
     if ($stamp) { $tail = ' ' + $stamp }
+    # Для одинаковых названий запоминается последний выданный номер, чтобы не перебирать их заново
+    $seqKey = ($dstDir + '|' + $base + '|' + $tail + '|' + $ext).ToLowerInvariant()
     $n = 1
-    while ($n -lt 1000) {
+    if ($script:NameSeq.ContainsKey($seqKey)) { $n = [int]$script:NameSeq[$seqKey] + 1 }
+    $limit = $n + 5000
+    while ($n -lt $limit) {
         $b = $base
         $suffix = ''
         if ($n -gt 1) { $suffix = " ($n)" }
@@ -189,7 +193,7 @@ function Resolve-TargetName([string]$dstDir, [string]$base, [string]$stamp, [str
         $free = $true
         if ($taken.ContainsKey($key)) { $free = $false }
         elseif (-not [string]::Equals($rel, $selfRel, [StringComparison]::OrdinalIgnoreCase) -and [IO.File]::Exists((Join-Rel $script:Root $rel))) { $free = $false }
-        if ($free) { $taken[$key] = $true; return @{ Name = $name; Base = ($b + $suffix) } }
+        if ($free) { $taken[$key] = $true; $script:NameSeq[$seqKey] = $n; return @{ Name = $name; Base = ($b + $suffix) } }
         $n++
     }
     return @{ Error = 'не удалось подобрать свободное имя' }
@@ -203,8 +207,11 @@ function New-PlanRow($rec, [string]$kind) {
     }
 }
 
+$script:NameSeq = @{}
+
 function Build-Plan {
     # Возвращает список строк плана
+    $script:NameSeq = @{}
     $thr = Get-OptNum 'ПорогУверенности'
     $rows = New-Object System.Collections.ArrayList
     $byRel = @{}
