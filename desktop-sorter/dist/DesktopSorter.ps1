@@ -538,6 +538,7 @@ $script:Defaults = @{
     'ПапкаЗаключенияСДоговором'          = 'Заключения\{папка заключения}'
     'ИмяКаталога'                        = 'Каталог рабочего стола.html'
     'ОткрыватьПланПослеФормирования'     = 'да'
+    'НазыватьВсеФайлыПоСодержимому'      = 'да'
     'ТестоваяПапка'                      = ''
 }
 
@@ -766,7 +767,7 @@ function Initialize-Config([string]$path) {
                      'МаксДлинаПути', 'МаксДлинаНазвания', 'МаксДлинаПапкиВНД')) { [void](Get-OptInt $n) }
     $thr = Get-OptNum 'ПорогУверенности'
     if ($thr -lt 0 -or $thr -gt 1) { throw 'Файл настроек: «ПорогУверенности» должен быть от 0 до 1.' }
-    foreach ($n in @('ПересчитыватьХешВсегда', 'СоздаватьВсюСтруктуру', 'РазбиратьНовыеФайлыВнутриСтруктуры', 'ОткрыватьПланПослеФормирования')) { [void](Get-OptBool $n) }
+    foreach ($n in @('ПересчитыватьХешВсегда', 'СоздаватьВсюСтруктуру', 'РазбиратьНовыеФайлыВнутриСтруктуры', 'ОткрыватьПланПослеФормирования', 'НазыватьВсеФайлыПоСодержимому')) { [void](Get-OptBool $n) }
     $mode = (Get-Opt 'РежимPDF').ToLowerInvariant()
     if ($mode -ne 'первая страница' -and $mode -ne 'целиком') { throw 'Файл настроек: «РежимPDF» должен быть «первая страница» или «целиком».' }
     $scan = (Get-Opt 'ЕслиСканНеПроверен').ToLowerInvariant()
@@ -4108,7 +4109,16 @@ function Get-PlannedName($rec, $an, [bool]$noRename) {
     if ($i -gt 0) { $ext = $name.Substring($i); $stem = $name.Substring(0, $i) }
     $stamp = Get-DateStamp $rec.mtime
     $core = $stem
+    # Название по содержимому: если включено в настройках, Claude даёт название каждому файлу,
+    # даже когда исходное имя понятное. Файлы, которым программа уже дала имя, заново не называются.
+    $byContent = ''
+    if ((Get-OptBool 'НазыватьВсеФайлыПоСодержимому') -and $an -and (Get-Str $an 'method') -eq 'Claude' -and -not $rec.nameBase) {
+        $byContent = ConvertTo-SafeName (Get-Str $an 'title')
+    }
     $m = [regex]::Match($stem, '^(.*\S)\s+(\d{2}-\d{2}-\d{4})$')
+    if ($byContent) {
+        return @{ Name = ($byContent + ' ' + $stamp + $ext); Base = $byContent; Stamp = $stamp; Ext = $ext }
+    }
     if ($m.Success) {
         if ($m.Groups[2].Value -eq $stamp) {
             # Файл уже назван по шаблону, повторно не переименовывается
