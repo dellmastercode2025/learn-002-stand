@@ -39,6 +39,12 @@ function Show-Banner {
     $ocr = 'нет'; if ($w.Ocr) { $ocr = 'есть (' + $w.OcrLang + ')' }
     Say ("  Снимок первой страницы PDF: $pdf. Распознавание текста для поиска пометки ДСП: $ocr.")
     foreach ($n in $w.Notes) { Write-Log ('  ' + $n) }
+    if (Test-BackupEnabled) {
+        $bk = Read-BackupKey
+        $bt = 'ключ ещё не спрашивался'
+        if ($bk.Key) { $bt = 'ключ сохранён' } elseif ($bk.Asked) { $bt = 'ключа нет' }
+        Say ("  Запасной сервис на случай, если Claude перестанет отвечать: Google Gemini ($bt).")
+    }
     Say ("  Судов в перечне КМТФ: $($script:Cfg.Fleet.Count). Файлов в базе: $(@($script:Db.Records.Values | Where-Object { -not $_.missing }).Count).")
     Say ''
 }

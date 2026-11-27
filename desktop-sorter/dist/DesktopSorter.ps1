@@ -47,6 +47,7 @@ $script:FileNames = @{
     Catalog   = 'catalog.json'
     Labels    = 'labels.json'
     Key       = 'api-key.dat'
+    Key2      = 'api-key-gemini.dat'
     Template  = 'catalog-template.html'
     Settings  = 'Настройки.txt'
     Lock      = 'run.lock'
@@ -539,6 +540,9 @@ $script:Defaults = @{
     'ИмяКаталога'                        = 'Каталог рабочего стола.html'
     'ОткрыватьПланПослеФормирования'     = 'да'
     'НазыватьВсеФайлыПоСодержимому'      = 'да'
+    'ЗапаснойСервис'                     = 'gemini'
+    'ЗапаснаяМодель'                     = 'gemini-3.5-flash-lite'
+    'АдресЗапасногоAPI'                  = 'https://generativelanguage.googleapis.com/v1beta/models'
     'ТестоваяПапка'                      = ''
 }
 
@@ -3094,8 +3098,15 @@ function Sync-Scan {
 #    параметры temperature, top_p, top_k не передаются (в текущей версии API они запрещены).
 # =====================================================================
 
-$script:Api = @{ Key = ''; Ready = $false; SystemText = ''; Schema = $null; SchemaJson = ''; Fingerprint = '' }
-$script:Usage = @{ Requests = 0; Input = [long]0; Output = [long]0; CacheWrite = [long]0; CacheRead = [long]0; Failed = 0 }
+$script:Api = @{ Key = ''; Ready = $false; SystemText = ''; Schema = $null; SchemaJson = ''; Fingerprint = ''
+                 Provider = 'claude'; BackupKey = ''; SchemaBackup = $null; BackupNoSchema = $false }
+$script:Usage = @{ Requests = 0; Input = [long]0; Output = [long]0; CacheWrite = [long]0; CacheRead = [long]0; Failed = 0; Backup = 0 }
+
+function Get-ProviderName {
+    if ($script:Api.Provider -eq 'gemini') { return 'Gemini' }
+    return 'Claude'
+}
+function Test-AiMethod([string]$method) { return ($method -eq 'Claude' -or $method -eq 'Gemini') }
 
 # ---------------------------------------------------------------------
 #  Ключ API: переменная среды или зашифрованный файл рядом с программой
@@ -3137,6 +3148,50 @@ function Request-ApiKey {
     if (-not $key) { return '' }
     try { Save-ApiKey $sec; Say 'Ключ сохранён в зашифрованном виде рядом с программой.' }
     catch { Warn ('Ключ не удалось сохранить, он будет использован только в этом запуске: ' + (Get-ErrText $_)) }
+    return $key
+}
+
+# ---------------------------------------------------------------------
+#  Запасной сервис (Google Gemini): на него программа переходит сама, когда на счёте Claude
+#  кончились деньги или ключ Claude перестал приниматься. Ключ хранится так же, в зашифрованном виде.
+# ---------------------------------------------------------------------
+function Get-BackupKeyPath { return [IO.Path]::Combine($script:ProgramDir, $script:FileNames.Key2) }
+
+function Test-BackupEnabled { return ((Get-Opt 'ЗапаснойСервис').Trim().ToLowerInvariant() -eq 'gemini') }
+
+function Read-BackupKey {
+    # Возвращает @{ Key; Asked }: Asked = $true, если вопрос о запасном ключе уже задавался
+    if (-not (Test-BackupEnabled)) { return @{ Key = ''; Asked = $true } }
+    if ($env:GEMINI_API_KEY) { return @{ Key = $env:GEMINI_API_KEY.Trim(); Asked = $true } }
+    $p = Get-BackupKeyPath
+    if ([IO.File]::Exists($p)) {
+        try {
+            $enc = (Read-TextFile $p).Trim()
+            if ($enc -eq 'нет') { return @{ Key = ''; Asked = $true } }
+            return @{ Key = (ConvertFrom-Secure (ConvertTo-SecureString -String $enc)).Trim(); Asked = $true }
+        } catch {
+            Warn 'Сохранённый запасной ключ (Gemini) не удалось расшифровать. Его нужно ввести заново.'
+        }
+    }
+    return @{ Key = ''; Asked = $false }
+}
+
+function Request-BackupKey {
+    Say ''
+    Say 'Запасной ключ (необязательно). Если на счёте Claude кончатся деньги, программа сама перейдёт на Google Gemini.'
+    Say 'Вставьте ключ Gemini и нажмите Enter. Если запасного ключа нет, просто нажмите Enter: больше программа не спросит.'
+    $sec = Read-Host -AsSecureString 'Запасной ключ'
+    $key = ''
+    if ($sec -and $sec.Length -gt 0) { $key = (ConvertFrom-Secure $sec).Trim() }
+    try {
+        if ($key) {
+            Write-TextFile (Get-BackupKeyPath) (ConvertFrom-SecureString -SecureString $sec) $script:Utf8NoBom
+            Say 'Запасной ключ сохранён в зашифрованном виде рядом с программой.'
+        } else {
+            Write-TextFile (Get-BackupKeyPath) 'нет' $script:Utf8NoBom
+            Say 'Запасного ключа нет. Чтобы добавить его позже, удалите файл api-key-gemini.dat рядом с программой.'
+        }
+    } catch { Warn ('Не удалось сохранить сведения о запасном ключе: ' + (Get-ErrText $_)) }
     return $key
 }
 
@@ -3246,6 +3301,10 @@ function Initialize-Prompt {
     $script:Api.SystemText = Build-SystemText
     $script:Api.Schema = Build-Schema
     $script:Api.SchemaJson = ConvertTo-JsonText $script:Api.Schema
+    # Для запасного сервиса та же схема, но без ключа additionalProperties (он принимается не всеми версиями)
+    $sb2 = Build-Schema
+    $sb2.Remove('additionalProperties')
+    $script:Api.SchemaBackup = $sb2
     $extra = @((Get-Opt 'Модель'), (Get-Opt 'УсилиеМодели'), (Get-Opt 'ЗнаковТекста'), (Get-Opt 'СтрокExcel'), (Get-Opt 'РежимPDF'), (Get-Opt 'ДлиннаяСторонаКартинки')) -join '|'
     $script:Api.Fingerprint = (Get-TextSha256 ($script:Api.SystemText + "`n" + $script:Api.SchemaJson + "`n" + $extra)).Substring(0, 16)
 }
@@ -3261,6 +3320,8 @@ function Initialize-Api {
     } catch { }
     $script:Api.Url = Get-Opt 'АдресAPI'
     if ($script:ApiUrlOverride) { $script:Api.Url = $script:ApiUrlOverride }
+    $script:Api.BackupUrl = (Get-Opt 'АдресЗапасногоAPI').TrimEnd('/')
+    if ($env:DESKTOPSORTER_TEST_API2) { $script:Api.BackupUrl = $env:DESKTOPSORTER_TEST_API2.TrimEnd('/') }
 }
 
 function Build-RequestBody($rec, $content, [bool]$dropContent, [string[]]$vndNames, [string[]]$insNames) {
@@ -3279,6 +3340,32 @@ function Build-RequestBody($rec, $content, [bool]$dropContent, [string[]]$vndNam
     $blocks = New-Object System.Collections.ArrayList
     $kind = $content.Kind
     if ($dropContent) { $kind = 'meta' }
+    if ($script:Api.Provider -eq 'gemini') {
+        # Запасной сервис Google Gemini: то же задание и то же содержимое в формате его API
+        $parts = New-Object System.Collections.ArrayList
+        if ($kind -eq 'image' -and $content.Image) {
+            [void]$parts.Add([ordered]@{ inlineData = [ordered]@{ mimeType = $content.MediaType; data = [Convert]::ToBase64String($content.Image) } })
+            [void]$sb.Append("`nК сообщению приложено изображение первой страницы файла.")
+        } elseif ($kind -eq 'pdf' -and $content.PdfBytes) {
+            [void]$parts.Add([ordered]@{ inlineData = [ordered]@{ mimeType = 'application/pdf'; data = [Convert]::ToBase64String($content.PdfBytes) } })
+            [void]$sb.Append("`nК сообщению приложен файл PDF. Определи назначение документа по первой странице.")
+        } elseif ($kind -eq 'text' -and $content.Text) {
+            [void]$sb.Append("`nСОДЕРЖИМОЕ ПЕРВОЙ СТРАНИЦЫ`n" + $content.Text)
+        } else {
+            $why = 'Содержимое файла не передаётся'
+            if ($content.Note) { $why += ' (' + $content.Note + ')' }
+            [void]$sb.Append("`n$why. Определи папку по имени и свойствам файла.")
+        }
+        [void]$parts.Add([ordered]@{ text = $sb.ToString() })
+        $gen = [ordered]@{ maxOutputTokens = (Get-OptInt 'МаксТокеновОтвета'); responseMimeType = 'application/json' }
+        if (-not $script:Api.BackupNoSchema) { $gen.responseJsonSchema = $script:Api.SchemaBackup }
+        $gbody = [ordered]@{
+            systemInstruction = [ordered]@{ parts = @([ordered]@{ text = $script:Api.SystemText }) }
+            contents          = @([ordered]@{ role = 'user'; parts = $parts.ToArray() })
+            generationConfig  = $gen
+        }
+        return (ConvertTo-JsonText $gbody)
+    }
     if ($kind -eq 'image' -and $content.Image) {
         [void]$blocks.Add([ordered]@{ type = 'image'; source = [ordered]@{ type = 'base64'; media_type = $content.MediaType; data = [Convert]::ToBase64String($content.Image) } })
         [void]$sb.Append("`nК сообщению приложено изображение первой страницы файла.")
@@ -3309,7 +3396,9 @@ function Build-RequestBody($rec, $content, [bool]$dropContent, [string[]]$vndNam
 # ---------------------------------------------------------------------
 function Start-ApiRequest([string]$json) {
     $bytes = $script:Utf8NoBom.GetBytes($json)
-    $req = [Net.HttpWebRequest][Net.WebRequest]::Create($script:Api.Url)
+    $url = $script:Api.Url
+    if ($script:Api.Provider -eq 'gemini') { $url = $script:Api.BackupUrl + '/' + (Get-Opt 'ЗапаснаяМодель').Trim() + ':generateContent' }
+    $req = [Net.HttpWebRequest][Net.WebRequest]::Create($url)
     $req.Method = 'POST'
     $req.ContentType = 'application/json'
     $req.Accept = 'application/json'
@@ -3317,8 +3406,11 @@ function Start-ApiRequest([string]$json) {
     $req.KeepAlive = $true
     $req.Timeout = 1000 * (Get-OptInt 'ТаймаутЗапроса_сек')
     $req.ReadWriteTimeout = 1000 * (Get-OptInt 'ТаймаутЗапроса_сек')
-    $req.Headers.Add('x-api-key', $script:Api.Key)
-    $req.Headers.Add('anthropic-version', (Get-Opt 'ВерсияAPI'))
+    if ($script:Api.Provider -eq 'gemini') { $req.Headers.Add('x-goog-api-key', $script:Api.BackupKey) }
+    else {
+        $req.Headers.Add('x-api-key', $script:Api.Key)
+        $req.Headers.Add('anthropic-version', (Get-Opt 'ВерсияAPI'))
+    }
     $req.ContentLength = $bytes.Length
     $st = $req.GetRequestStream()
     try { $st.Write($bytes, 0, $bytes.Length) } finally { $st.Dispose() }
@@ -3380,6 +3472,15 @@ function Get-ApiErrorText([int]$status, [string]$body) {
 #  Разбор и проверка ответа
 # ---------------------------------------------------------------------
 function Add-Usage($h) {
+    $g = Get-Val $h 'usageMetadata'
+    if ($g) {
+        # Запасной сервис считает токены под другими названиями
+        $cached = [long](Get-Val $g 'cachedContentTokenCount' 0)
+        $script:Usage.Input     += [Math]::Max([long]0, [long](Get-Val $g 'promptTokenCount' 0) - $cached)
+        $script:Usage.CacheRead += $cached
+        $script:Usage.Output    += [long](Get-Val $g 'candidatesTokenCount' 0) + [long](Get-Val $g 'thoughtsTokenCount' 0)
+        return
+    }
     $u = Get-Val $h 'usage'
     if (-not $u) { return }
     $script:Usage.Input      += [long](Get-Val $u 'input_tokens' 0)
@@ -3402,13 +3503,32 @@ function ConvertFrom-ApiResponse([string]$body) {
     try { $h = ConvertFrom-JsonText $body } catch { $out.Error = 'ответ сервиса не является JSON'; return $out }
     if (-not ($h -is [System.Collections.IDictionary])) { $out.Error = 'неожиданный ответ сервиса'; return $out }
     Add-Usage $h
-    $stop = Get-Str $h 'stop_reason'
-    if ($stop -eq 'refusal') { $out.Error = 'модель отказалась разбирать этот файл'; $out.Refusal = $true; return $out }
     $text = ''
-    foreach ($b in @(Get-Val $h 'content' @())) {
-        if ($b -is [System.Collections.IDictionary] -and (Get-Str $b 'type') -eq 'text') { $text += [string](Get-Val $b 'text' '') }
+    if ($script:Api.Provider -eq 'gemini') {
+        # Ответ Gemini: candidates[0].content.parts[].text; блоки размышлений помечены thought = true
+        $pf = Get-Val $h 'promptFeedback'
+        if ($pf -and (Get-Str $pf 'blockReason')) { $out.Error = 'модель отказалась разбирать этот файл'; $out.Refusal = $true; return $out }
+        $cands = @(Get-Val $h 'candidates' @())
+        if ($cands.Count -eq 0 -or -not ($cands[0] -is [System.Collections.IDictionary])) { $out.Error = 'в ответе модели нет текста'; return $out }
+        $fin = (Get-Str $cands[0] 'finishReason').ToUpperInvariant()
+        if (@('SAFETY', 'RECITATION', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII', 'IMAGE_SAFETY') -contains $fin) {
+            $out.Error = 'модель отказалась разбирать этот файл'; $out.Refusal = $true; return $out
+        }
+        $cnt = Get-Val $cands[0] 'content'
+        foreach ($b in @(Get-Val $cnt 'parts' @())) {
+            if ($b -is [System.Collections.IDictionary] -and -not [bool](Get-Val $b 'thought' $false)) { $text += [string](Get-Val $b 'text' '') }
+        }
+        if ($fin -eq 'MAX_TOKENS') { $out.Error = 'ответ модели обрезан по длине'; return $out }
+        # Без строгой схемы модель может обернуть JSON в ограду ```json
+        $text = [regex]::Replace($text.Trim(), '^```(?:json)?\s*|\s*```$', '')
+    } else {
+        $stop = Get-Str $h 'stop_reason'
+        if ($stop -eq 'refusal') { $out.Error = 'модель отказалась разбирать этот файл'; $out.Refusal = $true; return $out }
+        foreach ($b in @(Get-Val $h 'content' @())) {
+            if ($b -is [System.Collections.IDictionary] -and (Get-Str $b 'type') -eq 'text') { $text += [string](Get-Val $b 'text' '') }
+        }
+        if ($stop -eq 'max_tokens') { $out.Error = 'ответ модели обрезан по длине'; return $out }
     }
-    if ($stop -eq 'max_tokens') { $out.Error = 'ответ модели обрезан по длине'; return $out }
     if (-not $text.Trim()) { $out.Error = 'в ответе модели нет текста'; return $out }
     $d = $null
     try { $d = ConvertFrom-JsonText $text.Trim() } catch { $out.Error = 'ответ модели не является корректным JSON'; return $out }
@@ -3428,7 +3548,7 @@ function ConvertFrom-ApiResponse([string]$body) {
     $cv2 = Get-Str $d 'cert_kind'
     foreach ($k in $script:Cfg.CertKinds) { if ([string]::Equals($k.Name, $cv2, [StringComparison]::OrdinalIgnoreCase)) { $cert = $k.Name } }
     $an = @{
-        method = 'Claude'; fp = $script:Api.Fingerprint; at = (Get-NowText)
+        method = (Get-ProviderName); fp = $script:Api.Fingerprint; at = (Get-NowText)
         folder = $folder
         name_informative = [bool](Get-Val $d 'name_informative' $true)
         title = (Limit-Text (ConvertTo-SafeName (Get-Str $d 'title')) (Get-OptInt 'МаксДлинаНазвания'))
@@ -3708,6 +3828,13 @@ function Invoke-Analysis {
     $useApi = $true
     if (-not $script:Api.Key) { $script:Api.Key = Read-ApiKey }
     if (-not $script:Api.Key -and -not $script:AutoYes) { $script:Api.Key = Request-ApiKey }
+    # Запасной ключ (Gemini): спрашивается один раз, потом программа помнит ответ
+    $script:Api.Provider = 'claude'
+    if ($script:Api.Key) {
+        $bk = Read-BackupKey
+        $script:Api.BackupKey = $bk.Key
+        if (-not $bk.Asked -and -not $script:AutoYes) { $script:Api.BackupKey = Request-BackupKey }
+    }
     if (-not $script:Api.Key) {
         Warn 'Ключ доступа к Claude не задан.'
         if (-not (Ask-YesNo 'Продолжить без Claude, раскладывая файлы только по ключевым словам?')) { return $false }
@@ -3760,6 +3887,7 @@ function Invoke-Analysis {
                 $r = Complete-ApiRequest $p.Net
                 $rec = $p.Rec
                 $script:Usage.Requests++
+                if ($p.ContainsKey('Via') -and $p.Via -eq 'gemini') { $script:Usage.Backup++ }
                 if ($r.Status -eq 200) {
                     $netStreak = 0; $everOk = $true
                     $parsed = ConvertFrom-ApiResponse $r.Body
@@ -3770,7 +3898,7 @@ function Invoke-Analysis {
                         Set-RecordResult $rec $parsed.An 'new' ''
                         $done++
                     } elseif ($parsed.ContainsKey('Refusal')) {
-                        $an = New-LocalAnalysis 'Claude' $script:Cfg.ReviewFolder 0 $parsed.Error
+                        $an = New-LocalAnalysis (Get-ProviderName) $script:Cfg.ReviewFolder 0 $parsed.Error
                         Set-RecordResult $rec $an 'new' $parsed.Error
                         $done++
                     } elseif (-not $p.Revalidate) {
@@ -3778,7 +3906,7 @@ function Invoke-Analysis {
                         $p.Revalidate = $true
                         [void]$retry.Add(@{ Item = $p; NotBefore = (Get-Date) })
                     } else {
-                        $an = New-LocalAnalysis 'Claude' $script:Cfg.ReviewFolder 0 ('ответ модели не принят: ' + $parsed.Error)
+                        $an = New-LocalAnalysis (Get-ProviderName) $script:Cfg.ReviewFolder 0 ('ответ модели не принят: ' + $parsed.Error)
                         Set-RecordResult $rec $an 'new' $parsed.Error
                         $done++
                     }
@@ -3786,7 +3914,16 @@ function Invoke-Analysis {
                 }
                 $errText = $r.Message
                 if (-not $r.Network) { $errText = Get-ApiErrorText $r.Status $r.Body }
-                if ($r.Status -eq 401 -or $r.Status -eq 402 -or $r.Status -eq 403 -or $r.Status -eq 404) {
+                if ($script:Api.Provider -eq 'gemini' -and $r.Status -eq 400 -and $p.ContainsKey('WithSchema') -and $p.WithSchema -and $r.Body -match '(?i)schema') {
+                    # Запасной сервис не принял описание формата ответа: дальше формат задаётся только текстом задания
+                    if (-not $script:Api.BackupNoSchema) { Write-Log "  запасной сервис не принял схему ответа ($errText), запросы пойдут без неё" }
+                    $script:Api.BackupNoSchema = $true
+                    [void]$retry.Add(@{ Item = $p; NotBefore = (Get-Date) })
+                    continue
+                }
+                $badBackupKey = ($script:Api.Provider -eq 'gemini' -and $r.Status -eq 400 -and $r.Body -match '(?i)api.key')
+                if ($badBackupKey) { $errText = 'запасной ключ Gemini не принят : ' + $errText }
+                if ($r.Status -eq 401 -or $r.Status -eq 402 -or $r.Status -eq 403 -or $r.Status -eq 404 -or $badBackupKey) {
                     $fatal = $errText; $fatalStatus = $r.Status
                     [void]$retry.Add(@{ Item = $p; NotBefore = (Get-Date) })
                     continue
@@ -3836,15 +3973,25 @@ function Invoke-Analysis {
             $netLimit = [Math]::Max(8, 4 * $maxPar)
             if (-not $everOk) { $netLimit = [Math]::Max(4, 2 * $maxPar) }
             $hold = ($fatal -ne '' -or $failStreak -ge 5 -or $netStreak -ge $netLimit)
+            if ($hold -and $inflight.Count -eq 0 -and $fatal -ne '' -and $script:Api.Provider -eq 'claude' -and $script:Api.BackupKey -and
+                ($fatalStatus -eq 401 -or $fatalStatus -eq 402 -or $fatalStatus -eq 403)) {
+                # Claude больше не принимает запросы (кончились деньги или отклонён ключ): переход на запасной сервис
+                Clear-Status
+                Warn "Claude недоступен: $fatal."
+                Say 'Перехожу на запасной сервис Google Gemini. Файлы, оставшиеся без ответа, будут отправлены туда.' 'Yellow'
+                $script:Api.Provider = 'gemini'
+                $fatal = ''; $fatalStatus = 0; $failStreak = 0; $netStreak = 0; $hold = $false
+                foreach ($x in $retry) { $x.Item.Attempt = 0; $x.Item.Revalidate = $false; $x.NotBefore = (Get-Date) }
+            }
             if ($hold -and $inflight.Count -eq 0) {
                 Clear-Status
                 $why = $fatal
                 if (-not $why -and $netStreak -ge $netLimit) { $why = "нет связи с сервисом, попыток подряд без ответа: $netStreak ($lastNetErr)" }
                 if (-not $why) { $why = 'пять файлов подряд остались без ответа' }
-                Warn "Claude недоступен: $why."
+                Warn "$(Get-ProviderName) недоступен: $why."
                 # Ключ не принят: его можно сразу ввести заново, отложенные файлы уйдут с новым ключом
                 $again = $false
-                if ($fatalStatus -eq 401 -and -not $script:AutoYes) {
+                if ($fatalStatus -eq 401 -and $script:Api.Provider -eq 'claude' -and -not $script:AutoYes) {
                     if ($env:ANTHROPIC_API_KEY) { Say 'Ключ взят из переменной среды ANTHROPIC_API_KEY. Исправьте её значение и запустите программу снова.' }
                     elseif (Ask-YesNo 'Ввести ключ заново?') {
                         $newKey = Request-ApiKey
@@ -3911,6 +4058,8 @@ function Invoke-Analysis {
                 try {
                     $json = Build-RequestBody $item.Rec $item.Content $item.Drop @($script:VndNames) @($script:InsNames)
                     $item.Net = Start-ApiRequest $json
+                    $item.Via = $script:Api.Provider
+                    $item.WithSchema = ($script:Api.Provider -eq 'gemini' -and -not $script:Api.BackupNoSchema)
                     [void]$inflight.Add($item)
                     if ($item.Rec.hash) { $busyHash[$item.Rec.hash] = $true }
                 } catch {
@@ -3953,7 +4102,8 @@ function Invoke-Analysis {
     }
 
     $u = $script:Usage
-    Say ("  Обработано файлов: {0} из {1}. Запросов к Claude: {2}, из них без ответа: {3}." -f $done, $total, $u.Requests, $u.Failed)
+    Say ("  Обработано файлов: {0} из {1}. Запросов к модели: {2}, из них без ответа: {3}." -f $done, $total, $u.Requests, $u.Failed)
+    if ($u.Backup -gt 0) { Say ("  Из них через запасной сервис Gemini: {0}." -f $u.Backup) }
     if ($u.Requests -gt 0) {
         Say ("  Токены: входные {0}, из кэша {1}, записано в кэш {2}, выходные {3}." -f $u.Input, $u.CacheRead, $u.CacheWrite, $u.Output)
     }
@@ -4112,7 +4262,7 @@ function Get-PlannedName($rec, $an, [bool]$noRename) {
     # Название по содержимому: если включено в настройках, Claude даёт название каждому файлу,
     # даже когда исходное имя понятное. Файлы, которым программа уже дала имя, заново не называются.
     $byContent = ''
-    if ((Get-OptBool 'НазыватьВсеФайлыПоСодержимому') -and $an -and (Get-Str $an 'method') -eq 'Claude' -and -not $rec.nameBase) {
+    if ((Get-OptBool 'НазыватьВсеФайлыПоСодержимому') -and $an -and (Test-AiMethod (Get-Str $an 'method')) -and -not $rec.nameBase) {
         $byContent = ConvertTo-SafeName (Get-Str $an 'title')
     }
     $m = [regex]::Match($stem, '^(.*\S)\s+(\d{2}-\d{2}-\d{4})$')
@@ -4131,7 +4281,7 @@ function Get-PlannedName($rec, $an, [bool]$noRename) {
         # иначе дата в имени - это дата самого документа, она сохраняется
     }
     $informative = -not (Test-BadName $core)
-    if ($an -and $informative -and (Get-Str $an 'method') -eq 'Claude' -and -not [bool](Get-Val $an 'name_informative' $true) -and -not $rec.nameBase) { $informative = $false }
+    if ($an -and $informative -and (Test-AiMethod (Get-Str $an 'method')) -and -not [bool](Get-Val $an 'name_informative' $true) -and -not $rec.nameBase) { $informative = $false }
     if (-not $informative -and $an) {
         $t = ConvertTo-SafeName (Get-Str $an 'title')
         if ($t) { $core = $t }
@@ -5412,6 +5562,12 @@ function Show-Banner {
     $ocr = 'нет'; if ($w.Ocr) { $ocr = 'есть (' + $w.OcrLang + ')' }
     Say ("  Снимок первой страницы PDF: $pdf. Распознавание текста для поиска пометки ДСП: $ocr.")
     foreach ($n in $w.Notes) { Write-Log ('  ' + $n) }
+    if (Test-BackupEnabled) {
+        $bk = Read-BackupKey
+        $bt = 'ключ ещё не спрашивался'
+        if ($bk.Key) { $bt = 'ключ сохранён' } elseif ($bk.Asked) { $bt = 'ключа нет' }
+        Say ("  Запасной сервис на случай, если Claude перестанет отвечать: Google Gemini ($bt).")
+    }
     Say ("  Судов в перечне КМТФ: $($script:Cfg.Fleet.Count). Файлов в базе: $(@($script:Db.Records.Values | Where-Object { -not $_.missing }).Count).")
     Say ''
 }

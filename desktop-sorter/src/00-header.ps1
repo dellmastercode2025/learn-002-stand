@@ -47,6 +47,7 @@ $script:FileNames = @{
     Catalog   = 'catalog.json'
     Labels    = 'labels.json'
     Key       = 'api-key.dat'
+    Key2      = 'api-key-gemini.dat'
     Template  = 'catalog-template.html'
     Settings  = 'Настройки.txt'
     Lock      = 'run.lock'

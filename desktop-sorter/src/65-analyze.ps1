@@ -205,6 +205,13 @@ function Invoke-Analysis {
     $useApi = $true
     if (-not $script:Api.Key) { $script:Api.Key = Read-ApiKey }
     if (-not $script:Api.Key -and -not $script:AutoYes) { $script:Api.Key = Request-ApiKey }
+    # Запасной ключ (Gemini): спрашивается один раз, потом программа помнит ответ
+    $script:Api.Provider = 'claude'
+    if ($script:Api.Key) {
+        $bk = Read-BackupKey
+        $script:Api.BackupKey = $bk.Key
+        if (-not $bk.Asked -and -not $script:AutoYes) { $script:Api.BackupKey = Request-BackupKey }
+    }
     if (-not $script:Api.Key) {
         Warn 'Ключ доступа к Claude не задан.'
         if (-not (Ask-YesNo 'Продолжить без Claude, раскладывая файлы только по ключевым словам?')) { return $false }
@@ -257,6 +264,7 @@ function Invoke-Analysis {
                 $r = Complete-ApiRequest $p.Net
                 $rec = $p.Rec
                 $script:Usage.Requests++
+                if ($p.ContainsKey('Via') -and $p.Via -eq 'gemini') { $script:Usage.Backup++ }
                 if ($r.Status -eq 200) {
                     $netStreak = 0; $everOk = $true
                     $parsed = ConvertFrom-ApiResponse $r.Body
@@ -267,7 +275,7 @@ function Invoke-Analysis {
                         Set-RecordResult $rec $parsed.An 'new' ''
                         $done++
                     } elseif ($parsed.ContainsKey('Refusal')) {
-                        $an = New-LocalAnalysis 'Claude' $script:Cfg.ReviewFolder 0 $parsed.Error
+                        $an = New-LocalAnalysis (Get-ProviderName) $script:Cfg.ReviewFolder 0 $parsed.Error
                         Set-RecordResult $rec $an 'new' $parsed.Error
                         $done++
                     } elseif (-not $p.Revalidate) {
@@ -275,7 +283,7 @@ function Invoke-Analysis {
                         $p.Revalidate = $true
                         [void]$retry.Add(@{ Item = $p; NotBefore = (Get-Date) })
                     } else {
-                        $an = New-LocalAnalysis 'Claude' $script:Cfg.ReviewFolder 0 ('ответ модели не принят: ' + $parsed.Error)
+                        $an = New-LocalAnalysis (Get-ProviderName) $script:Cfg.ReviewFolder 0 ('ответ модели не принят: ' + $parsed.Error)
                         Set-RecordResult $rec $an 'new' $parsed.Error
                         $done++
                     }
@@ -283,7 +291,16 @@ function Invoke-Analysis {
                 }
                 $errText = $r.Message
                 if (-not $r.Network) { $errText = Get-ApiErrorText $r.Status $r.Body }
-                if ($r.Status -eq 401 -or $r.Status -eq 402 -or $r.Status -eq 403 -or $r.Status -eq 404) {
+                if ($script:Api.Provider -eq 'gemini' -and $r.Status -eq 400 -and $p.ContainsKey('WithSchema') -and $p.WithSchema -and $r.Body -match '(?i)schema') {
+                    # Запасной сервис не принял описание формата ответа: дальше формат задаётся только текстом задания
+                    if (-not $script:Api.BackupNoSchema) { Write-Log "  запасной сервис не принял схему ответа ($errText), запросы пойдут без неё" }
+                    $script:Api.BackupNoSchema = $true
+                    [void]$retry.Add(@{ Item = $p; NotBefore = (Get-Date) })
+                    continue
+                }
+                $badBackupKey = ($script:Api.Provider -eq 'gemini' -and $r.Status -eq 400 -and $r.Body -match '(?i)api.key')
+                if ($badBackupKey) { $errText = 'запасной ключ Gemini не принят : ' + $errText }
+                if ($r.Status -eq 401 -or $r.Status -eq 402 -or $r.Status -eq 403 -or $r.Status -eq 404 -or $badBackupKey) {
                     $fatal = $errText; $fatalStatus = $r.Status
                     [void]$retry.Add(@{ Item = $p; NotBefore = (Get-Date) })
                     continue
@@ -333,15 +350,25 @@ function Invoke-Analysis {
             $netLimit = [Math]::Max(8, 4 * $maxPar)
             if (-not $everOk) { $netLimit = [Math]::Max(4, 2 * $maxPar) }
             $hold = ($fatal -ne '' -or $failStreak -ge 5 -or $netStreak -ge $netLimit)
+            if ($hold -and $inflight.Count -eq 0 -and $fatal -ne '' -and $script:Api.Provider -eq 'claude' -and $script:Api.BackupKey -and
+                ($fatalStatus -eq 401 -or $fatalStatus -eq 402 -or $fatalStatus -eq 403)) {
+                # Claude больше не принимает запросы (кончились деньги или отклонён ключ): переход на запасной сервис
+                Clear-Status
+                Warn "Claude недоступен: $fatal."
+                Say 'Перехожу на запасной сервис Google Gemini. Файлы, оставшиеся без ответа, будут отправлены туда.' 'Yellow'
+                $script:Api.Provider = 'gemini'
+                $fatal = ''; $fatalStatus = 0; $failStreak = 0; $netStreak = 0; $hold = $false
+                foreach ($x in $retry) { $x.Item.Attempt = 0; $x.Item.Revalidate = $false; $x.NotBefore = (Get-Date) }
+            }
             if ($hold -and $inflight.Count -eq 0) {
                 Clear-Status
                 $why = $fatal
                 if (-not $why -and $netStreak -ge $netLimit) { $why = "нет связи с сервисом, попыток подряд без ответа: $netStreak ($lastNetErr)" }
                 if (-not $why) { $why = 'пять файлов подряд остались без ответа' }
-                Warn "Claude недоступен: $why."
+                Warn "$(Get-ProviderName) недоступен: $why."
                 # Ключ не принят: его можно сразу ввести заново, отложенные файлы уйдут с новым ключом
                 $again = $false
-                if ($fatalStatus -eq 401 -and -not $script:AutoYes) {
+                if ($fatalStatus -eq 401 -and $script:Api.Provider -eq 'claude' -and -not $script:AutoYes) {
                     if ($env:ANTHROPIC_API_KEY) { Say 'Ключ взят из переменной среды ANTHROPIC_API_KEY. Исправьте её значение и запустите программу снова.' }
                     elseif (Ask-YesNo 'Ввести ключ заново?') {
                         $newKey = Request-ApiKey
@@ -408,6 +435,8 @@ function Invoke-Analysis {
                 try {
                     $json = Build-RequestBody $item.Rec $item.Content $item.Drop @($script:VndNames) @($script:InsNames)
                     $item.Net = Start-ApiRequest $json
+                    $item.Via = $script:Api.Provider
+                    $item.WithSchema = ($script:Api.Provider -eq 'gemini' -and -not $script:Api.BackupNoSchema)
                     [void]$inflight.Add($item)
                     if ($item.Rec.hash) { $busyHash[$item.Rec.hash] = $true }
                 } catch {
@@ -450,7 +479,8 @@ function Invoke-Analysis {
     }
 
     $u = $script:Usage
-    Say ("  Обработано файлов: {0} из {1}. Запросов к Claude: {2}, из них без ответа: {3}." -f $done, $total, $u.Requests, $u.Failed)
+    Say ("  Обработано файлов: {0} из {1}. Запросов к модели: {2}, из них без ответа: {3}." -f $done, $total, $u.Requests, $u.Failed)
+    if ($u.Backup -gt 0) { Say ("  Из них через запасной сервис Gemini: {0}." -f $u.Backup) }
     if ($u.Requests -gt 0) {
         Say ("  Токены: входные {0}, из кэша {1}, записано в кэш {2}, выходные {3}." -f $u.Input, $u.CacheRead, $u.CacheWrite, $u.Output)
     }

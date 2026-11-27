@@ -149,7 +149,7 @@ function Get-PlannedName($rec, $an, [bool]$noRename) {
     # Название по содержимому: если включено в настройках, Claude даёт название каждому файлу,
     # даже когда исходное имя понятное. Файлы, которым программа уже дала имя, заново не называются.
     $byContent = ''
-    if ((Get-OptBool 'НазыватьВсеФайлыПоСодержимому') -and $an -and (Get-Str $an 'method') -eq 'Claude' -and -not $rec.nameBase) {
+    if ((Get-OptBool 'НазыватьВсеФайлыПоСодержимому') -and $an -and (Test-AiMethod (Get-Str $an 'method')) -and -not $rec.nameBase) {
         $byContent = ConvertTo-SafeName (Get-Str $an 'title')
     }
     $m = [regex]::Match($stem, '^(.*\S)\s+(\d{2}-\d{2}-\d{4})$')
@@ -168,7 +168,7 @@ function Get-PlannedName($rec, $an, [bool]$noRename) {
         # иначе дата в имени - это дата самого документа, она сохраняется
     }
     $informative = -not (Test-BadName $core)
-    if ($an -and $informative -and (Get-Str $an 'method') -eq 'Claude' -and -not [bool](Get-Val $an 'name_informative' $true) -and -not $rec.nameBase) { $informative = $false }
+    if ($an -and $informative -and (Test-AiMethod (Get-Str $an 'method')) -and -not [bool](Get-Val $an 'name_informative' $true) -and -not $rec.nameBase) { $informative = $false }
     if (-not $informative -and $an) {
         $t = ConvertTo-SafeName (Get-Str $an 'title')
         if ($t) { $core = $t }
