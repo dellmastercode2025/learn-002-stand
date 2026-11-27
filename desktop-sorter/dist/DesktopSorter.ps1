@@ -540,6 +540,7 @@ $script:Defaults = @{
     'ИмяКаталога'                        = 'Каталог рабочего стола.html'
     'ОткрыватьПланПослеФормирования'     = 'да'
     'НазыватьВсеФайлыПоСодержимому'      = 'да'
+    'НаРазборПоГодамИТемам'              = 'да'
     'ЗапаснойСервис'                     = 'gemini'
     'ЗапаснаяМодель'                     = 'gemini-3.5-flash-lite'
     'АдресЗапасногоAPI'                  = 'https://generativelanguage.googleapis.com/v1beta/models'
@@ -776,7 +777,7 @@ function Initialize-Config([string]$path) {
                      'МаксДлинаПути', 'МаксДлинаНазвания', 'МаксДлинаПапкиВНД')) { [void](Get-OptInt $n) }
     $thr = Get-OptNum 'ПорогУверенности'
     if ($thr -lt 0 -or $thr -gt 1) { throw 'Файл настроек: «ПорогУверенности» должен быть от 0 до 1.' }
-    foreach ($n in @('ПересчитыватьХешВсегда', 'СоздаватьВсюСтруктуру', 'РазбиратьНовыеФайлыВнутриСтруктуры', 'ОткрыватьПланПослеФормирования', 'НазыватьВсеФайлыПоСодержимому')) { [void](Get-OptBool $n) }
+    foreach ($n in @('ПересчитыватьХешВсегда', 'СоздаватьВсюСтруктуру', 'РазбиратьНовыеФайлыВнутриСтруктуры', 'ОткрыватьПланПослеФормирования', 'НазыватьВсеФайлыПоСодержимому', 'НаРазборПоГодамИТемам')) { [void](Get-OptBool $n) }
     $mode = (Get-Opt 'РежимPDF').ToLowerInvariant()
     if ($mode -ne 'первая страница' -and $mode -ne 'целиком') { throw 'Файл настроек: «РежимPDF» должен быть «первая страница» или «целиком».' }
     $scan = (Get-Opt 'ЕслиСканНеПроверен').ToLowerInvariant()
@@ -3269,6 +3270,7 @@ cert_kind : для сертификата P&I его вид из списка; �
 issuer : для сертификата или свидетельства о страховании выдавшая организация; иначе пустая строка.
 insurance_start : дата начала периода страхования в виде ДД.ММ.ГГГГ или пустая строка.
 vnd_name : для внутреннего нормативного документа его наименование до 60 знаков без кавычек и номера редакции; для формы наименование документа, к которому она относится. Если подходящее наименование есть в переданном списке существующих папок ВНД, верни его буква в букву. Для остальных файлов пустая строка.
+review_topic : короткое название тематической папки на русском языке, до 60 знаков, по смыслу документа: о чём он, какое судно, проект, контрагент или направление, например «Суда ДО Лондонский офис» или «Аренда офиса в Актау». Нужно на случай, если файл попадёт в папку «На разбор»: там файлы раскладываются по таким темам. Если по смыслу подходит тема из переданного перечня существующих тем, верни её буква в букву, новую тему создавай, только когда ни одна не подходит. Без года, без дат и без слова «папка».
 tool_purpose, tool_version : для HTML-инструмента назначение одним предложением и версия, если она указана в тексте или имени файла; иначе пустые строки.
 is_conclusion_attachment : true, если файл является приложением к заключению по рискам и это видно из имени или текста.
 keywords : от трёх до восьми ключевых слов на русском языке.
@@ -3300,6 +3302,7 @@ function Build-Schema {
         issuer                   = $str
         insurance_start          = $str
         vnd_name                 = $str
+        review_topic             = $str
         tool_purpose             = $str
         tool_version             = $str
         is_conclusion_attachment = [ordered]@{ type = 'boolean' }
@@ -3341,6 +3344,7 @@ function Build-RequestBody($rec, $content, [bool]$dropContent, [string[]]$vndNam
     # перечень папок ВНД и содержимое файла идут после неё.
     $sb = New-Object System.Text.StringBuilder
     if ($vndNames.Count -gt 0) { [void]$sb.Append('Существующие папки ВНД: ' + ($vndNames -join '; ') + "`n") }
+    if ($script:TopicNames.Count -gt 0) { [void]$sb.Append('Существующие темы в папке «' + $script:Cfg.ReviewFolder + '»: ' + ($script:TopicNames -join '; ') + "`n") }
     else { [void]$sb.Append("Существующих папок ВНД пока нет.`n") }
     if ($insNames.Count -gt 0) { [void]$sb.Append('Уже созданные папки других видов страхования: ' + ($insNames -join '; ') + "`n") }
     $dir = Get-RelParent $rec.rel
@@ -3571,6 +3575,7 @@ function ConvertFrom-ApiResponse([string]$body) {
         insurance_kind = (Get-Str $d 'insurance_kind'); cert_kind = $cert
         issuer = (Get-Str $d 'issuer'); insurance_start = (Get-Str $d 'insurance_start')
         vnd_name = (Get-Str $d 'vnd_name')
+        review_topic = (Get-Str $d 'review_topic')
         tool_purpose = (Get-Str $d 'tool_purpose'); tool_version = (Get-Str $d 'tool_version')
         is_conclusion_attachment = [bool](Get-Val $d 'is_conclusion_attachment' $false)
         keywords = $kw.ToArray(); confidence = $conf; note = ''
@@ -3587,7 +3592,7 @@ function New-LocalAnalysis([string]$method, [string]$folder, [double]$conf, [str
         method = $method; fp = $script:Api.Fingerprint; at = (Get-NowText); folder = $folder
         name_informative = $true; title = ''; description = ''; doc_type = ''; doc_date = ''; doc_number = ''
         counterparty = ''; subject = ''; vessel = ''; vessel_imo = ''; shipowner = ''; insurance_kind = ''; cert_kind = ''
-        issuer = ''; insurance_start = ''; vnd_name = ''; tool_purpose = ''; tool_version = ''
+        issuer = ''; insurance_start = ''; vnd_name = ''; review_topic = ''; tool_purpose = ''; tool_version = ''
         is_conclusion_attachment = $false; keywords = @(); confidence = $conf; note = $note
     }
 }
@@ -3680,6 +3685,22 @@ function Get-InsTemplatePrefix {
     return ''
 }
 
+$script:TopicNames = New-Object System.Collections.ArrayList
+$script:TopicKeys = @{}
+
+function Add-TopicName([string]$name) {
+    # Тема для папки «На разбор»: одинаковые по смыслу написания сводятся к одному названию
+    $n = Limit-Text (ConvertTo-SafeName $name) (Get-OptInt 'МаксДлинаПапкиВНД')
+    $n = $n.Trim(' ', '.')
+    if (-not $n -or $n -match '^\d{4}$') { return '' }
+    $k = Get-NormKey $n
+    if (-not $k) { return '' }
+    if ($script:TopicKeys.ContainsKey($k)) { return $script:TopicKeys[$k] }
+    $script:TopicKeys[$k] = $n
+    [void]$script:TopicNames.Add($n)
+    return $n
+}
+
 function Initialize-DynamicLists {
     # Перечни папок, которые передаются модели при каждом запросе,
     # чтобы один документ не получил несколько папок
@@ -3694,6 +3715,21 @@ function Initialize-DynamicLists {
         if ([IO.Directory]::Exists($dir)) {
             foreach ($d in [IO.Directory]::GetDirectories($dir)) { Add-VndName ([IO.Path]::GetFileName($d)) }
         }
+    }
+    # Темы в «На разбор»: уже созданные папки (На разбор\год\тема) и темы из сохранённых ответов
+    $script:TopicNames = New-Object System.Collections.ArrayList
+    $script:TopicKeys = @{}
+    $rd = Join-Rel $script:Root $script:Cfg.ReviewFolder
+    if ([IO.Directory]::Exists($rd)) {
+        foreach ($y in [IO.Directory]::GetDirectories($rd)) {
+            if ([IO.Path]::GetFileName($y) -notmatch '^\d{4}$') { continue }
+            foreach ($t in [IO.Directory]::GetDirectories($y)) { [void](Add-TopicName ([IO.Path]::GetFileName($t))) }
+        }
+    }
+    foreach ($rec in $script:Db.Records.Values) {
+        if ($rec.missing -or -not $rec.an) { continue }
+        $tp = Get-Str $rec.an 'review_topic'
+        if ($tp) { $rec.an.review_topic = Add-TopicName $tp }
     }
     foreach ($rec in $script:Db.Records.Values) {
         if ($rec.missing -or -not $rec.an) { continue }
@@ -3769,6 +3805,7 @@ function Set-RecordResult($rec, $an, [string]$status, [string]$reason) {
     if ($an) { $f = [string](Get-Val $an 'folder' '') }
     if ($f -like '*{наименование ВНД}*') { $an.vnd_name = Add-VndName (Get-Str $an 'vnd_name') }
     if ($f -like '*{вид страхования}*') { $an.insurance_kind = Resolve-InsKind (Get-Str $an 'insurance_kind') }
+    if ($an -and (Get-Str $an 'review_topic')) { $an.review_topic = Add-TopicName (Get-Str $an 'review_topic') }
     Write-Log ("  {0} -> {1} [{2}; {3}] {4}" -f $rec.rel, $f, (Get-Str $an 'method'), $status, $reason)
 }
 
@@ -4379,6 +4416,17 @@ function New-PlanRow($rec, [string]$kind) {
 
 $script:NameSeq = @{}
 
+function Get-ReviewDir($rec, $an) {
+    # Папка внутри «На разбор»: год из даты изменения файла, затем тема, которую предложила модель
+    $base = $script:Cfg.ReviewFolder
+    if (-not (Get-OptBool 'НаРазборПоГодамИТемам')) { return $base }
+    $dir = Join-RelParts $base ([string](Get-MtimeYear $rec))
+    $topic = ''
+    if ($an) { $topic = ConvertTo-SafeName (Get-Str $an 'review_topic') }
+    if ($topic) { $dir = Join-RelParts $dir $topic }
+    return $dir
+}
+
 function Build-Plan {
     # Возвращает список строк плана
     $script:NameSeq = @{}
@@ -4414,17 +4462,17 @@ function Build-Plan {
         $folder = Get-Str $an 'folder'
         $conf = [double](Get-Val $an 'confidence' 0)
         if ($rec.status -eq 'protected') { $row.Template = $script:Cfg.ProtectedFolder; $row.DstDir = $script:Cfg.ProtectedFolder; continue }
-        if (-not $folder -or $folder -eq $script:Cfg.ReviewFolder) { $row.Template = $script:Cfg.ReviewFolder; $row.DstDir = $script:Cfg.ReviewFolder; continue }
+        if (-not $folder -or $folder -eq $script:Cfg.ReviewFolder) { $row.Template = $script:Cfg.ReviewFolder; $row.DstDir = (Get-ReviewDir $rec $an); continue }
         if ($conf -lt $thr) {
-            $row.Template = $script:Cfg.ReviewFolder; $row.DstDir = $script:Cfg.ReviewFolder
+            $row.Template = $script:Cfg.ReviewFolder; $row.DstDir = (Get-ReviewDir $rec $an)
             $row.Note = (("уверенность {0:N2} ниже порога, предлагалась папка «{1}». " -f $conf, $folder) + $row.Note).Trim()
             continue
         }
         $t = Get-FolderTemplate $folder
-        if (-not $t) { $row.Template = $script:Cfg.ReviewFolder; $row.DstDir = $script:Cfg.ReviewFolder; $row.Note = "папки «$folder» больше нет в настройках"; continue }
+        if (-not $t) { $row.Template = $script:Cfg.ReviewFolder; $row.DstDir = (Get-ReviewDir $rec $an); $row.Note = "папки «$folder» больше нет в настройках"; continue }
         $dir = Expand-FolderTemplate $t $rec $an
         if (-not $dir) {
-            $row.Template = $script:Cfg.ReviewFolder; $row.DstDir = $script:Cfg.ReviewFolder
+            $row.Template = $script:Cfg.ReviewFolder; $row.DstDir = (Get-ReviewDir $rec $an)
             $row.Note = (("не удалось определить документ, к которому относится файл (папка «{0}»). " -f $folder) + $row.Note).Trim()
             continue
         }
@@ -4436,7 +4484,7 @@ function Build-Plan {
             $own = Find-FleetVessel $vessel (Get-Str $an 'vessel_imo')
             $third = ($t.Path -like 'Сторонние проекты*')
             if ($third -and $own) {
-                $row.Template = $script:Cfg.ReviewFolder; $row.DstDir = $script:Cfg.ReviewFolder
+                $row.Template = $script:Cfg.ReviewFolder; $row.DstDir = (Get-ReviewDir $rec $an)
                 $row.Note = ("судно «$vessel» есть в перечне судов КМТФ, а документ отнесён к сторонним проектам. " + $row.Note).Trim()
             } elseif (-not $third -and -not $own) {
                 $row.Note = ("судна «$vessel» нет в перечне судов КМТФ, проверьте папку. " + $row.Note).Trim()
@@ -4745,7 +4793,7 @@ function Get-PlanStats($rows) {
     foreach ($row in $rows) {
         $s.Total++
         if ($row.Action -eq 'нет') { $s.None++ } elseif ($row.Action -eq 'переименование') { $s.Rename++ } else { $s.Move++ }
-        if ($row.Action -ne 'нет' -and [string]::Equals($row.DstDir, $script:Cfg.ReviewFolder, [StringComparison]::OrdinalIgnoreCase)) { $s.Review++ }
+        if ($row.Action -ne 'нет' -and (Test-RelUnder $row.DstDir $script:Cfg.ReviewFolder)) { $s.Review++ }
         if ($row.Rec.status -eq 'dsp') { $s.Dsp++ }
         if ($row.Rec.status -eq 'protected') { $s.Protected++ }
         if ($row.Rec.status -eq 'locked') { $s.Locked++ }
@@ -4853,7 +4901,7 @@ h2{font-size:16px;margin:26px 0 8px}
         $cls = 'move'
         if ($rec.status -eq 'dsp') { $cls = 'dsp' }
         elseif ($row.Action -eq 'нет') { $cls = 'none' }
-        elseif ([string]::Equals($row.DstDir, $script:Cfg.ReviewFolder, [StringComparison]::OrdinalIgnoreCase)) { $cls = 'review' }
+        elseif (Test-RelUnder $row.DstDir $script:Cfg.ReviewFolder) { $cls = 'review' }
         $conf = ''
         if ($an -and (Get-Str $an 'method') -ne 'не анализировался') { $conf = ('{0:N2}' -f [double](Get-Val $an 'confidence' 0)) }
         $src = Get-RelParent $rec.rel
@@ -5670,7 +5718,7 @@ function Invoke-ApplyStage {
     $res = Invoke-Apply $plan.Rows
     try { [IO.File]::Move((Get-ServicePath 'PlanJson'), ([IO.Path]::Combine($script:ServiceDir, ('plan-' + $script:RunId + '-выполнен.jsonl')))) } catch { }
     $script:LastApply = $res
-    $review = @($plan.Rows | Where-Object { $_.action -ne 'нет' -and [string]::Equals([string]$_.dstDir, $script:Cfg.ReviewFolder, [StringComparison]::OrdinalIgnoreCase) }).Count
+    $review = @($plan.Rows | Where-Object { $_.action -ne 'нет' -and (Test-RelUnder ([string]$_.dstDir) $script:Cfg.ReviewFolder) }).Count
     Say ''
     Say 'ОТЧЁТ' 'Green'
     Say ("  Перемещено: {0}. Только переименовано: {1}. Создано папок: {2}. Удалено пустых папок: {3}." -f $res.Moved, $res.Renamed, $res.Dirs, $res.Removed)

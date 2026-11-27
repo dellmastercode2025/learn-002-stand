@@ -15,6 +15,22 @@ function Get-InsTemplatePrefix {
     return ''
 }
 
+$script:TopicNames = New-Object System.Collections.ArrayList
+$script:TopicKeys = @{}
+
+function Add-TopicName([string]$name) {
+    # Тема для папки «На разбор»: одинаковые по смыслу написания сводятся к одному названию
+    $n = Limit-Text (ConvertTo-SafeName $name) (Get-OptInt 'МаксДлинаПапкиВНД')
+    $n = $n.Trim(' ', '.')
+    if (-not $n -or $n -match '^\d{4}$') { return '' }
+    $k = Get-NormKey $n
+    if (-not $k) { return '' }
+    if ($script:TopicKeys.ContainsKey($k)) { return $script:TopicKeys[$k] }
+    $script:TopicKeys[$k] = $n
+    [void]$script:TopicNames.Add($n)
+    return $n
+}
+
 function Initialize-DynamicLists {
     # Перечни папок, которые передаются модели при каждом запросе,
     # чтобы один документ не получил несколько папок
@@ -29,6 +45,21 @@ function Initialize-DynamicLists {
         if ([IO.Directory]::Exists($dir)) {
             foreach ($d in [IO.Directory]::GetDirectories($dir)) { Add-VndName ([IO.Path]::GetFileName($d)) }
         }
+    }
+    # Темы в «На разбор»: уже созданные папки (На разбор\год\тема) и темы из сохранённых ответов
+    $script:TopicNames = New-Object System.Collections.ArrayList
+    $script:TopicKeys = @{}
+    $rd = Join-Rel $script:Root $script:Cfg.ReviewFolder
+    if ([IO.Directory]::Exists($rd)) {
+        foreach ($y in [IO.Directory]::GetDirectories($rd)) {
+            if ([IO.Path]::GetFileName($y) -notmatch '^\d{4}$') { continue }
+            foreach ($t in [IO.Directory]::GetDirectories($y)) { [void](Add-TopicName ([IO.Path]::GetFileName($t))) }
+        }
+    }
+    foreach ($rec in $script:Db.Records.Values) {
+        if ($rec.missing -or -not $rec.an) { continue }
+        $tp = Get-Str $rec.an 'review_topic'
+        if ($tp) { $rec.an.review_topic = Add-TopicName $tp }
     }
     foreach ($rec in $script:Db.Records.Values) {
         if ($rec.missing -or -not $rec.an) { continue }
@@ -104,6 +135,7 @@ function Set-RecordResult($rec, $an, [string]$status, [string]$reason) {
     if ($an) { $f = [string](Get-Val $an 'folder' '') }
     if ($f -like '*{наименование ВНД}*') { $an.vnd_name = Add-VndName (Get-Str $an 'vnd_name') }
     if ($f -like '*{вид страхования}*') { $an.insurance_kind = Resolve-InsKind (Get-Str $an 'insurance_kind') }
+    if ($an -and (Get-Str $an 'review_topic')) { $an.review_topic = Add-TopicName (Get-Str $an 'review_topic') }
     Write-Log ("  {0} -> {1} [{2}; {3}] {4}" -f $rec.rel, $f, (Get-Str $an 'method'), $status, $reason)
 }
 

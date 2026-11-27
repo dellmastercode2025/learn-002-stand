@@ -224,6 +224,17 @@ function New-PlanRow($rec, [string]$kind) {
 
 $script:NameSeq = @{}
 
+function Get-ReviewDir($rec, $an) {
+    # Папка внутри «На разбор»: год из даты изменения файла, затем тема, которую предложила модель
+    $base = $script:Cfg.ReviewFolder
+    if (-not (Get-OptBool 'НаРазборПоГодамИТемам')) { return $base }
+    $dir = Join-RelParts $base ([string](Get-MtimeYear $rec))
+    $topic = ''
+    if ($an) { $topic = ConvertTo-SafeName (Get-Str $an 'review_topic') }
+    if ($topic) { $dir = Join-RelParts $dir $topic }
+    return $dir
+}
+
 function Build-Plan {
     # Возвращает список строк плана
     $script:NameSeq = @{}
@@ -259,17 +270,17 @@ function Build-Plan {
         $folder = Get-Str $an 'folder'
         $conf = [double](Get-Val $an 'confidence' 0)
         if ($rec.status -eq 'protected') { $row.Template = $script:Cfg.ProtectedFolder; $row.DstDir = $script:Cfg.ProtectedFolder; continue }
-        if (-not $folder -or $folder -eq $script:Cfg.ReviewFolder) { $row.Template = $script:Cfg.ReviewFolder; $row.DstDir = $script:Cfg.ReviewFolder; continue }
+        if (-not $folder -or $folder -eq $script:Cfg.ReviewFolder) { $row.Template = $script:Cfg.ReviewFolder; $row.DstDir = (Get-ReviewDir $rec $an); continue }
         if ($conf -lt $thr) {
-            $row.Template = $script:Cfg.ReviewFolder; $row.DstDir = $script:Cfg.ReviewFolder
+            $row.Template = $script:Cfg.ReviewFolder; $row.DstDir = (Get-ReviewDir $rec $an)
             $row.Note = (("уверенность {0:N2} ниже порога, предлагалась папка «{1}». " -f $conf, $folder) + $row.Note).Trim()
             continue
         }
         $t = Get-FolderTemplate $folder
-        if (-not $t) { $row.Template = $script:Cfg.ReviewFolder; $row.DstDir = $script:Cfg.ReviewFolder; $row.Note = "папки «$folder» больше нет в настройках"; continue }
+        if (-not $t) { $row.Template = $script:Cfg.ReviewFolder; $row.DstDir = (Get-ReviewDir $rec $an); $row.Note = "папки «$folder» больше нет в настройках"; continue }
         $dir = Expand-FolderTemplate $t $rec $an
         if (-not $dir) {
-            $row.Template = $script:Cfg.ReviewFolder; $row.DstDir = $script:Cfg.ReviewFolder
+            $row.Template = $script:Cfg.ReviewFolder; $row.DstDir = (Get-ReviewDir $rec $an)
             $row.Note = (("не удалось определить документ, к которому относится файл (папка «{0}»). " -f $folder) + $row.Note).Trim()
             continue
         }
@@ -281,7 +292,7 @@ function Build-Plan {
             $own = Find-FleetVessel $vessel (Get-Str $an 'vessel_imo')
             $third = ($t.Path -like 'Сторонние проекты*')
             if ($third -and $own) {
-                $row.Template = $script:Cfg.ReviewFolder; $row.DstDir = $script:Cfg.ReviewFolder
+                $row.Template = $script:Cfg.ReviewFolder; $row.DstDir = (Get-ReviewDir $rec $an)
                 $row.Note = ("судно «$vessel» есть в перечне судов КМТФ, а документ отнесён к сторонним проектам. " + $row.Note).Trim()
             } elseif (-not $third -and -not $own) {
                 $row.Note = ("судна «$vessel» нет в перечне судов КМТФ, проверьте папку. " + $row.Note).Trim()

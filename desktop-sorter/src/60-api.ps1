@@ -173,6 +173,7 @@ cert_kind : для сертификата P&I его вид из списка; �
 issuer : для сертификата или свидетельства о страховании выдавшая организация; иначе пустая строка.
 insurance_start : дата начала периода страхования в виде ДД.ММ.ГГГГ или пустая строка.
 vnd_name : для внутреннего нормативного документа его наименование до 60 знаков без кавычек и номера редакции; для формы наименование документа, к которому она относится. Если подходящее наименование есть в переданном списке существующих папок ВНД, верни его буква в букву. Для остальных файлов пустая строка.
+review_topic : короткое название тематической папки на русском языке, до 60 знаков, по смыслу документа: о чём он, какое судно, проект, контрагент или направление, например «Суда ДО Лондонский офис» или «Аренда офиса в Актау». Нужно на случай, если файл попадёт в папку «На разбор»: там файлы раскладываются по таким темам. Если по смыслу подходит тема из переданного перечня существующих тем, верни её буква в букву, новую тему создавай, только когда ни одна не подходит. Без года, без дат и без слова «папка».
 tool_purpose, tool_version : для HTML-инструмента назначение одним предложением и версия, если она указана в тексте или имени файла; иначе пустые строки.
 is_conclusion_attachment : true, если файл является приложением к заключению по рискам и это видно из имени или текста.
 keywords : от трёх до восьми ключевых слов на русском языке.
@@ -204,6 +205,7 @@ function Build-Schema {
         issuer                   = $str
         insurance_start          = $str
         vnd_name                 = $str
+        review_topic             = $str
         tool_purpose             = $str
         tool_version             = $str
         is_conclusion_attachment = [ordered]@{ type = 'boolean' }
@@ -245,6 +247,7 @@ function Build-RequestBody($rec, $content, [bool]$dropContent, [string[]]$vndNam
     # перечень папок ВНД и содержимое файла идут после неё.
     $sb = New-Object System.Text.StringBuilder
     if ($vndNames.Count -gt 0) { [void]$sb.Append('Существующие папки ВНД: ' + ($vndNames -join '; ') + "`n") }
+    if ($script:TopicNames.Count -gt 0) { [void]$sb.Append('Существующие темы в папке «' + $script:Cfg.ReviewFolder + '»: ' + ($script:TopicNames -join '; ') + "`n") }
     else { [void]$sb.Append("Существующих папок ВНД пока нет.`n") }
     if ($insNames.Count -gt 0) { [void]$sb.Append('Уже созданные папки других видов страхования: ' + ($insNames -join '; ') + "`n") }
     $dir = Get-RelParent $rec.rel
@@ -475,6 +478,7 @@ function ConvertFrom-ApiResponse([string]$body) {
         insurance_kind = (Get-Str $d 'insurance_kind'); cert_kind = $cert
         issuer = (Get-Str $d 'issuer'); insurance_start = (Get-Str $d 'insurance_start')
         vnd_name = (Get-Str $d 'vnd_name')
+        review_topic = (Get-Str $d 'review_topic')
         tool_purpose = (Get-Str $d 'tool_purpose'); tool_version = (Get-Str $d 'tool_version')
         is_conclusion_attachment = [bool](Get-Val $d 'is_conclusion_attachment' $false)
         keywords = $kw.ToArray(); confidence = $conf; note = ''
@@ -491,7 +495,7 @@ function New-LocalAnalysis([string]$method, [string]$folder, [double]$conf, [str
         method = $method; fp = $script:Api.Fingerprint; at = (Get-NowText); folder = $folder
         name_informative = $true; title = ''; description = ''; doc_type = ''; doc_date = ''; doc_number = ''
         counterparty = ''; subject = ''; vessel = ''; vessel_imo = ''; shipowner = ''; insurance_kind = ''; cert_kind = ''
-        issuer = ''; insurance_start = ''; vnd_name = ''; tool_purpose = ''; tool_version = ''
+        issuer = ''; insurance_start = ''; vnd_name = ''; review_topic = ''; tool_purpose = ''; tool_version = ''
         is_conclusion_attachment = $false; keywords = @(); confidence = $conf; note = $note
     }
 }

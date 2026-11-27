@@ -99,7 +99,7 @@ function Invoke-ApplyStage {
     $res = Invoke-Apply $plan.Rows
     try { [IO.File]::Move((Get-ServicePath 'PlanJson'), ([IO.Path]::Combine($script:ServiceDir, ('plan-' + $script:RunId + '-выполнен.jsonl')))) } catch { }
     $script:LastApply = $res
-    $review = @($plan.Rows | Where-Object { $_.action -ne 'нет' -and [string]::Equals([string]$_.dstDir, $script:Cfg.ReviewFolder, [StringComparison]::OrdinalIgnoreCase) }).Count
+    $review = @($plan.Rows | Where-Object { $_.action -ne 'нет' -and (Test-RelUnder ([string]$_.dstDir) $script:Cfg.ReviewFolder) }).Count
     Say ''
     Say 'ОТЧЁТ' 'Green'
     Say ("  Перемещено: {0}. Только переименовано: {1}. Создано папок: {2}. Удалено пустых папок: {3}." -f $res.Moved, $res.Renamed, $res.Dirs, $res.Removed)

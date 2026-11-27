@@ -203,7 +203,7 @@ function Get-PlanStats($rows) {
     foreach ($row in $rows) {
         $s.Total++
         if ($row.Action -eq 'нет') { $s.None++ } elseif ($row.Action -eq 'переименование') { $s.Rename++ } else { $s.Move++ }
-        if ($row.Action -ne 'нет' -and [string]::Equals($row.DstDir, $script:Cfg.ReviewFolder, [StringComparison]::OrdinalIgnoreCase)) { $s.Review++ }
+        if ($row.Action -ne 'нет' -and (Test-RelUnder $row.DstDir $script:Cfg.ReviewFolder)) { $s.Review++ }
         if ($row.Rec.status -eq 'dsp') { $s.Dsp++ }
         if ($row.Rec.status -eq 'protected') { $s.Protected++ }
         if ($row.Rec.status -eq 'locked') { $s.Locked++ }
@@ -311,7 +311,7 @@ h2{font-size:16px;margin:26px 0 8px}
         $cls = 'move'
         if ($rec.status -eq 'dsp') { $cls = 'dsp' }
         elseif ($row.Action -eq 'нет') { $cls = 'none' }
-        elseif ([string]::Equals($row.DstDir, $script:Cfg.ReviewFolder, [StringComparison]::OrdinalIgnoreCase)) { $cls = 'review' }
+        elseif (Test-RelUnder $row.DstDir $script:Cfg.ReviewFolder) { $cls = 'review' }
         $conf = ''
         if ($an -and (Get-Str $an 'method') -ne 'не анализировался') { $conf = ('{0:N2}' -f [double](Get-Val $an 'confidence' 0)) }
         $src = Get-RelParent $rec.rel
