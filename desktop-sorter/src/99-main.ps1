@@ -67,6 +67,8 @@ function Invoke-PlanStage {
     $ok = Invoke-Analysis
     Save-Db
     if (-not $ok) { return $false }
+    Invoke-TopicReview
+    Save-Db
     Say 'Шаг 4. Составление плана…'
     $rows = Build-Plan
     Save-Plan $rows

@@ -259,6 +259,15 @@ function Build-Plan {
         $note = Get-Str $an 'note'
         if ($note) { $row.Note = $note }
         if ($rec.unit -and $placedUnits.ContainsKey($rec.unit.ToLowerInvariant())) { $row.KeepDir = $true; continue }
+        if ($rec.placed -and $rec.placedBy -ne 'пользователь' -and (Get-OptBool 'НаРазборПоГодамИТемам') -and (Test-RelUnder (Get-RelParent $rec.rel) $script:Cfg.ReviewFolder)) {
+            # Файл в «На разбор»: если его тема изменилась (например, темы объединены), он переезжает в новую папку темы
+            $want = Get-ReviewDir $rec $an
+            if (-not [string]::Equals($want, (Get-RelParent $rec.rel), [StringComparison]::OrdinalIgnoreCase)) {
+                $row.Movable = $true; $row.Template = $script:Cfg.ReviewFolder; $row.DstDir = $want
+                $row.Note = ('тема в «На разбор» уточнена. ' + $row.Note).Trim()
+                continue
+            }
+        }
         if ($rec.placed) {
             # Файл уже лежит на своём месте (разложен раньше или положен вами): папка не меняется
             $row.Template = ''

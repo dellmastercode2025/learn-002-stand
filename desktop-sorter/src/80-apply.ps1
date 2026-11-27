@@ -88,7 +88,9 @@ function Remove-EmptyDirs {
         }
     }
     foreach ($rel in @($all | Sort-Object { ($_ -split '\\').Count } -Descending)) {
-        if (Test-InStructure $rel) { continue }
+        # Опустевшие папки тем внутри «На разбор» (На разбор\год\тема) тоже убираются: темы могли объединиться
+        $reviewTopic = ((Test-RelUnder $rel $script:Cfg.ReviewFolder) -and (@($rel -split '\\').Count -ge (@($script:Cfg.ReviewFolder -split '\\').Count + 2)))
+        if ((Test-InStructure $rel) -and -not $reviewTopic) { continue }
         $full = Join-Rel $script:Root $rel
         try {
             if (-not [IO.Directory]::Exists($full)) { continue }
