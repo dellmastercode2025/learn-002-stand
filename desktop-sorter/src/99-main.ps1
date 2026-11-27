@@ -134,8 +134,51 @@ function Invoke-CatalogStage {
     Build-Catalog
 }
 
+function Test-OneProvider([string]$provider) {
+    # Один настоящий запрос в том же виде, что и при разборе, но про выдуманный файл без содержимого
+    $script:Api.Provider = $provider
+    $rec = @{ rel = 'Проверка ключа.txt'; name = 'Проверка ключа.txt'; ext = '.txt'; size = [long]100; mtime = (ConvertTo-TicksText ([datetime]::UtcNow)) }
+    $content = @{ Kind = 'meta'; Pages = 0; Note = 'проверочный запрос, файла нет'; Text = '' }
+    for ($try = 1; $try -le 2; $try++) {
+        $net = Start-ApiRequest (Build-RequestBody $rec $content $false @() @())
+        # Ошибка запроса здесь не выбрасывается: её разбирает Complete-ApiRequest
+        try { [void]$net.Task.Wait(1000 * (Get-OptInt 'ТаймаутЗапроса_сек')) } catch { }
+        $r = Complete-ApiRequest $net
+        if ($r.Status -eq 200) {
+            $parsed = ConvertFrom-ApiResponse $r.Body
+            if ($parsed.Ok -or $parsed.ContainsKey('Refusal')) { return 'работает' }
+            return ('связь есть, но ответ не принят: ' + $parsed.Error)
+        }
+        if ($provider -eq 'gemini' -and $r.Status -eq 400 -and -not $script:Api.BackupNoSchema -and $r.Body -match '(?i)schema') { $script:Api.BackupNoSchema = $true; continue }
+        if ($r.Network) { return ('нет связи: ' + $r.Message) }
+        return (Get-ApiErrorText $r.Status $r.Body)
+    }
+    return 'не удалось проверить'
+}
+
+function Invoke-KeyCheck {
+    # Проверка ключей: по одному запросу в Claude и в запасной сервис. Файлы не читаются и не отправляются.
+    Say 'Отправляю по одному проверочному запросу. Ваши файлы при этом не читаются и никуда не уходят.'
+    if (-not $script:Api.Key) { $script:Api.Key = Read-ApiKey }
+    if (-not $script:Api.Key -and -not $script:AutoYes) { $script:Api.Key = Request-ApiKey }
+    if ($script:Api.Key) { Say ('  Claude (' + (Get-Opt 'Модель') + '): ' + (Test-OneProvider 'claude')) }
+    else { Say '  Claude: ключ не задан' }
+    if (Test-BackupEnabled) {
+        $bk = Read-BackupKey
+        $script:Api.BackupKey = $bk.Key
+        if (-not $bk.Key -and -not $script:AutoYes) { Remove-Item -LiteralPath (Get-BackupKeyPath) -ErrorAction SilentlyContinue; $script:Api.BackupKey = Request-BackupKey }
+        if ($script:Api.BackupKey) { Say ('  Запасной Gemini (' + (Get-Opt 'ЗапаснаяМодель') + '): ' + (Test-OneProvider 'gemini')) }
+        else { Say '  Запасной Gemini: ключа нет' }
+    } else { Say '  Запасной сервис выключен в настройках.' }
+    $script:Api.Provider = 'claude'
+}
+
 function Invoke-Mode([string]$mode) {
     switch ($mode) {
+        '6' {
+            Say 'РЕЖИМ 6. Проверка ключей' 'Cyan'
+            Invoke-KeyCheck
+        }
         '1' {
             Say 'РЕЖИМ 1. Только план' 'Cyan'
             if (Invoke-PlanStage) { if (Get-OptBool 'ОткрыватьПланПослеФормирования') { Open-ForUser (Get-ServicePath 'PlanHtml') } }
@@ -179,12 +222,13 @@ function Start-Main {
                 Say '  3 - Полный разбор (план, подтверждение, перемещение, каталог)'
                 Say '  4 - Только обновить каталог'
                 Say '  5 - Откат последнего разбора'
+                Say '  6 - Проверить ключи Claude и Gemini (один короткий запрос в каждый)'
                 Say '  0 - Выход'
                 $c = Read-Host 'Введите номер и нажмите Enter'
                 if ($null -eq $c) { break }
                 $c = $c.Trim()
                 if ($c -eq '0' -or $c -eq '') { break }
-                if (@('1', '2', '3', '4', '5') -notcontains $c) { Say 'Нужно ввести цифру от 0 до 5.'; continue }
+                if (@('1', '2', '3', '4', '5', '6') -notcontains $c) { Say 'Нужно ввести цифру от 0 до 6.'; continue }
                 try { Invoke-Mode $c }
                 catch {
                     Clear-Status
