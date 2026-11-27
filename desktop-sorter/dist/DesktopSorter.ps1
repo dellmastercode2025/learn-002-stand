@@ -655,6 +655,11 @@ function Initialize-Config([string]$path) {
         [void]$folders.Add($t)
     }
     if ($folders.Count -eq 0) { throw 'Файл настроек: раздел [Папки] пуст.' }
+    $script:Cfg.ConclusionFolder = 'Заключения'
+    if (-not $seen.ContainsKey($script:Cfg.ConclusionFolder)) {
+        $desc = 'Заключения, справки, аналитические справки и информационные материалы по рискам, страхованию и санкциям'
+        [void]$folders.Add((New-FolderTemplate $script:Cfg.ConclusionFolder $desc 0))
+    }
     $script:Cfg.Folders = $folders.ToArray()
 
     # Особые папки
@@ -3222,6 +3227,13 @@ function Build-SystemText {
     foreach ($r in $script:Cfg.Rules) { [void]$sb.Append($r + "`n") }
     [void]$sb.Append("`n")
 
+    [void]$sb.AppendLine(@"
+ПРИОРИТЕТ ДЛЯ ПАПКИ «$($script:Cfg.ConclusionFolder)»
+Это правило имеет приоритет над описаниями папок и правилами распределения выше. Выбирай «$($script:Cfg.ConclusionFolder)» для самостоятельных заключений, справок и аналитических справок, а также для информационных и аналитических материалов по рискам, страхованию и санкциям. Сюда относятся обзоры, сводки и презентации с анализом или разъяснениями по этим темам. Определяй назначение по заголовку и содержанию, даже если имя файла нейтральное.
+Справка по страховому покрытию, заключение по проекту договора и обзор санкционных ограничений относятся сюда. Действующий полис, ковер-нота, договор, сертификат, страховое свидетельство, первичный реестр, нормативный документ и бланк относятся в папку своего вида. Упоминание рисков, страхования, санкций или заключения договора в тексте само по себе не меняет вид документа.
+
+"@)
+
     [void]$sb.Append("ПЕРЕЧЕНЬ СУДОВ КМТФ`n")
     if ($script:Cfg.Fleet.Count -eq 0) { [void]$sb.Append("Перечень не задан. Судно считай судном КМТФ, только если это прямо следует из документа.`n") }
     foreach ($v in $script:Cfg.Fleet) {
@@ -3586,6 +3598,24 @@ function Test-KeywordIn($w, [string]$s) {
     return $s.Contains($w.Text)
 }
 
+function Get-ConclusionHeadingType([string]$heading) {
+    # Заголовок или имя файла: не ищем отдельные тематические слова по всему тексту.
+    $heading = ($heading -replace '[_\u2013\u2014-]+', ' ').Trim()
+    $heading = $heading -replace '^(?:\d{4}[. ]\d{2}[. ]\d{2}|\d{2}[. ]\d{2}[. ]\d{4})[. ]+', ''
+    if ($heading -match '^(?:проект\s+)?(?:экспертное\s+|аналитическое\s+)?заключени[ея]\b(?!\s+(?:договора|соглашения|контракта|сделки)\b)') {
+        return 'заключение'
+    }
+    if ($heading -match '^(?:аналитическая\s+|информационная\s+|справочная\s+)?справк[аи]\b') {
+        return 'справка'
+    }
+    $format = 'информационн(?:ый материал|ые материалы|ая записка|ое сообщение)|аналитическ(?:ий обзор|ая записка|ий материал)|обзор|сводка|презентация'
+    $topic = 'риск\p{L}*|страхов\p{L}*|санкци\p{L}*'
+    if ($heading -match "^(?:$format)\b.*\b(?:$topic)\b") {
+        return 'информационный материал'
+    }
+    return ''
+}
+
 function Get-KeywordAnalysis([string]$name, [string]$ext, [string]$text, [string]$note, $html) {
     # Папка по ключевым словам. Слово в имени файла весит втрое больше слова в тексте,
     # словосочетание весит больше одиночного слова. Уверенно раскладываются только файлы
@@ -3611,6 +3641,18 @@ function Get-KeywordAnalysis([string]$name, [string]$ext, [string]$text, [string
         $an = New-LocalAnalysis 'ключевые слова' $target 0.8 (($note + '; HTML-инструмент определён по встроенным скриптам').Trim(';', ' '))
         $an.doc_type = 'HTML-инструмент'
         if ($html.Title) { $an.tool_purpose = [string]$html.Title; $an.description = [string]$html.Title }
+        return $an
+    }
+    $baseName = Get-NameNoExt $name
+    $kind = Get-ConclusionHeadingType $baseName
+    if (-not $kind -and $text -and (Test-BadName $baseName)) {
+        $firstLine = ($text.TrimStart() -split '\r?\n', 2)[0]
+        if ($firstLine.Length -le 160) { $kind = Get-ConclusionHeadingType $firstLine }
+    }
+    if ($kind) {
+        $an = New-LocalAnalysis 'ключевые слова' $script:Cfg.ConclusionFolder 0.85 $note
+        $an.doc_type = $kind
+        $an.name_informative = (-not (Test-BadName $baseName))
         return $an
     }
     if (-not $best) { return (New-LocalAnalysis 'ключевые слова' $script:Cfg.ReviewFolder 0.3 (($note + '; подходящих ключевых слов не найдено').Trim(';', ' '))) }
@@ -4196,7 +4238,13 @@ function Find-ConclusionGroups($rows) {
     $used = @{}
     foreach ($d in @($byDir.Keys)) {
         $list = $byDir[$d]
-        $concs = @($list | Where-Object { [string]::Equals($_.Template, $concFolder, [StringComparison]::OrdinalIgnoreCase) -and -not (Get-Val $_.An 'is_conclusion_attachment' $false) })
+        $concs = @($list | Where-Object {
+            $_.Template -eq $concFolder -and
+                -not (Get-Val $_.An 'is_conclusion_attachment' $false) -and
+                ($concFolder -ne $script:Cfg.ConclusionFolder -or
+                    (Get-Str $_.An 'doc_type') -match '\bзаключение\b' -or
+                    (Get-ConclusionHeadingType (Get-NameNoExt $_.Rec.name)) -eq 'заключение')
+        })
         if ($concs.Count -eq 0) { continue }
         $assign = @{}
         foreach ($row in $list) {

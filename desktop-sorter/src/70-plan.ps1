@@ -83,7 +83,13 @@ function Find-ConclusionGroups($rows) {
     $used = @{}
     foreach ($d in @($byDir.Keys)) {
         $list = $byDir[$d]
-        $concs = @($list | Where-Object { [string]::Equals($_.Template, $concFolder, [StringComparison]::OrdinalIgnoreCase) -and -not (Get-Val $_.An 'is_conclusion_attachment' $false) })
+        $concs = @($list | Where-Object {
+            $_.Template -eq $concFolder -and
+                -not (Get-Val $_.An 'is_conclusion_attachment' $false) -and
+                ($concFolder -ne $script:Cfg.ConclusionFolder -or
+                    (Get-Str $_.An 'doc_type') -match '\bзаключение\b' -or
+                    (Get-ConclusionHeadingType (Get-NameNoExt $_.Rec.name)) -eq 'заключение')
+        })
         if ($concs.Count -eq 0) { continue }
         $assign = @{}
         foreach ($row in $list) {

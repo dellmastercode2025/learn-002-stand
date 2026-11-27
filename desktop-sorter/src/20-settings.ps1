@@ -151,6 +151,11 @@ function Initialize-Config([string]$path) {
         [void]$folders.Add($t)
     }
     if ($folders.Count -eq 0) { throw 'Файл настроек: раздел [Папки] пуст.' }
+    $script:Cfg.ConclusionFolder = 'Заключения'
+    if (-not $seen.ContainsKey($script:Cfg.ConclusionFolder)) {
+        $desc = 'Заключения, справки, аналитические справки и информационные материалы по рискам, страхованию и санкциям'
+        [void]$folders.Add((New-FolderTemplate $script:Cfg.ConclusionFolder $desc 0))
+    }
     $script:Cfg.Folders = $folders.ToArray()
 
     # Особые папки
