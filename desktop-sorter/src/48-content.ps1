@@ -11,6 +11,8 @@ $script:ExtHtml   = @('.html', '.htm')
 $script:ExtImage  = @('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tif', '.tiff', '.webp')
 $script:ExtBook   = @('.epub', '.fb2', '.djvu', '.djv')
 
+function Test-ArchiveExt([string]$ext) { return (@('.zip', '.rar', '.7z') -contains $ext) }
+
 function Get-FileContent([string]$full, [string]$name, [string]$ext, [long]$size) {
     # Возвращает хеш-таблицу:
     #   State - ok | meta | unverified | protected | corrupt | locked | dsp

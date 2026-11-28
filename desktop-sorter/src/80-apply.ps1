@@ -173,7 +173,8 @@ function Invoke-Apply($rows) {
                 }
                 foreach ($m in $members) {
                     $m.rel = Join-RelParts $unitDst $m.rel.Substring($unitSrc.Length).TrimStart('\')
-                    $m.unit = $unitDst; $m.placed = $true; $m.placedBy = 'программа'; $m.home = (Get-RelParent $m.rel)
+                    $m.unit = $unitDst; $m.home = (Get-RelParent $m.rel)
+                    if ($r.action -ne 'переименование папки') { $m.placed = $true; $m.placedBy = 'программа' }
                     if ($m.status -ne 'unit') { $m.status = 'placed' }
                 }
                 Write-Journal $op.Id $id $op.Type $op.Src $op.Dst '' 'Выполнено' '' ''

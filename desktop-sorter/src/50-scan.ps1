@@ -82,6 +82,16 @@ function Find-PlacedToolMain([IO.DirectoryInfo]$di) {
     return ''
 }
 
+function Test-MailFolder([IO.DirectoryInfo]$di) {
+    # Папка с выгруженной почтой: не меньше двух писем, и письма - больше половины файлов в ней
+    if (-not (Get-OptBool 'ПапкиСПочтойНеРазбирать')) { return $false }
+    try {
+        $files = @($di.GetFiles() | Where-Object { ($_.Attributes -band $script:AttrHidSys) -eq 0 })
+        $mail = @($files | Where-Object { @('.msg', '.eml') -contains $_.Extension.ToLowerInvariant() }).Count
+        return ($mail -ge 2 -and $mail * 2 -gt $files.Count)
+    } catch { return $false }
+}
+
 function Add-ScanFile($fi, [string]$rel, [string]$unit, [bool]$unitMain) {
     [void]$script:Scan.Files.Add(@{
         Rel = $rel; Full = $fi.FullName; Name = $fi.Name; Ext = $fi.Extension.ToLowerInvariant()
@@ -203,6 +213,16 @@ function Scan-Dir([string]$full, [string]$rel, [string]$unit) {
         if (Test-ProgramDir $d 0) {
             [void]$script:Scan.Skipped.Add(@{ Rel = $drel; Reason = 'папка с программой (внутри есть .dll), не разбирается' }); continue
         }
+        if ($rel -ne $script:Cfg.ReviewFolder -and (Test-MailFolder $d)) {
+            # Папка с почтой: хранится целиком на своём месте, к названию добавляется дата создания
+            $before = $script:Scan.Files.Count
+            Scan-Dir $d.FullName $drel $drel
+            $main = ''
+            if ($script:Scan.Files.Count -gt $before) { $script:Scan.Files[$before].UnitMain = $true; $main = $script:Scan.Files[$before].Rel }
+            [void]$script:Scan.Units.Add(@{ Kind = 'mail'; Rel = $drel; Main = $main; Folder = $drel; Created = $d.CreationTime })
+            $script:MailUnits[$drel.ToLowerInvariant()] = $true
+            continue
+        }
         if (-not (Test-InStructure $drel)) {
             $main = Find-ToolFolderMain $d
             if ($main) {
@@ -228,6 +248,7 @@ function Invoke-Scan {
         Dirs = (New-Object System.Collections.ArrayList); ExcludedFiles = 0
     }
     # Папки инструментов из структуры: их вложенные папки переносятся и хранятся целиком
+    $script:MailUnits = @{}
     $script:ToolFolders = @($script:Cfg.Folders | Where-Object { $_.Path -match '(?i)инструмент' -and $_.Path -notmatch '\{' } | ForEach-Object { $_.Path })
     Scan-Dir $script:Root '' ''
     Clear-Status

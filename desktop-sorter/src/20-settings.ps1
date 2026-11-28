@@ -38,6 +38,9 @@ $script:Defaults = @{
     'НазыватьВсеФайлыПоСодержимому'      = 'да'
     'НаРазборПоГодамИТемам'              = 'да'
     'ПересматриватьТемыНаРазбор'         = 'да'
+    'ПапкаДляАрхивов'                    = 'ZIP-архивы'
+    'ПапкиСПочтойНеРазбирать'            = 'да'
+    'СервисДляPDF'                       = 'gemini'
     'ЗапаснойСервис'                     = 'gemini'
     'ЗапаснаяМодель'                     = 'gemini-3.5-flash-lite'
     'АдресЗапасногоAPI'                  = 'https://generativelanguage.googleapis.com/v1beta/models'
@@ -165,6 +168,10 @@ function Initialize-Config([string]$path) {
     $script:Cfg.ProtectedFolder = ConvertTo-SafeName (Get-Opt 'ПапкаДляФайловСПаролем')
     if (-not $script:Cfg.ReviewFolder) { throw 'Файл настроек: параметр «ПапкаНаРазбор» не задан.' }
     if (-not $script:Cfg.ProtectedFolder) { throw 'Файл настроек: параметр «ПапкаДляФайловСПаролем» не задан.' }
+    # Архивы собираются в одну папку без обращения к модели; пустое значение - архивы разбираются как остальные файлы
+    $script:Cfg.ArchiveFolder = ConvertTo-SafeName (Get-Opt 'ПапкаДляАрхивов')
+    $pv = (Get-Opt 'СервисДляPDF').Trim().ToLowerInvariant()
+    if ($pv -ne 'gemini' -and $pv -ne 'claude') { throw 'Файл настроек: «СервисДляPDF» должен быть «gemini» или «claude».' }
     $script:Cfg.GroupTemplate = New-FolderTemplate (Get-Opt 'ПапкаЗаключенияСДоговором') '' 0
     if ($script:Cfg.GroupTemplate.Segs[-1] -ne '{папка заключения}') {
         throw 'Файл настроек: параметр «ПапкаЗаключенияСДоговором» должен заканчиваться подстановкой {папка заключения}.'
@@ -274,7 +281,7 @@ function Initialize-Config([string]$path) {
                      'МаксДлинаПути', 'МаксДлинаНазвания', 'МаксДлинаПапкиВНД')) { [void](Get-OptInt $n) }
     $thr = Get-OptNum 'ПорогУверенности'
     if ($thr -lt 0 -or $thr -gt 1) { throw 'Файл настроек: «ПорогУверенности» должен быть от 0 до 1.' }
-    foreach ($n in @('ПересчитыватьХешВсегда', 'СоздаватьВсюСтруктуру', 'РазбиратьНовыеФайлыВнутриСтруктуры', 'ОткрыватьПланПослеФормирования', 'НазыватьВсеФайлыПоСодержимому', 'НаРазборПоГодамИТемам', 'ПересматриватьТемыНаРазбор')) { [void](Get-OptBool $n) }
+    foreach ($n in @('ПересчитыватьХешВсегда', 'СоздаватьВсюСтруктуру', 'РазбиратьНовыеФайлыВнутриСтруктуры', 'ОткрыватьПланПослеФормирования', 'НазыватьВсеФайлыПоСодержимому', 'НаРазборПоГодамИТемам', 'ПересматриватьТемыНаРазбор', 'ПапкиСПочтойНеРазбирать')) { [void](Get-OptBool $n) }
     $mode = (Get-Opt 'РежимPDF').ToLowerInvariant()
     if ($mode -ne 'первая страница' -and $mode -ne 'целиком') { throw 'Файл настроек: «РежимPDF» должен быть «первая страница» или «целиком».' }
     $scan = (Get-Opt 'ЕслиСканНеПроверен').ToLowerInvariant()
@@ -298,6 +305,7 @@ function Get-AllTemplates {
     foreach ($t in $script:Cfg.Folders) { [void]$all.Add($t) }
     [void]$all.Add(@{ Path = $script:Cfg.ReviewFolder; Segs = @($script:Cfg.ReviewFolder); Desc = '' })
     [void]$all.Add(@{ Path = $script:Cfg.ProtectedFolder; Segs = @($script:Cfg.ProtectedFolder); Desc = '' })
+    if ($script:Cfg.ArchiveFolder) { [void]$all.Add(@{ Path = $script:Cfg.ArchiveFolder; Segs = @($script:Cfg.ArchiveFolder); Desc = '' }) }
     [void]$all.Add($script:Cfg.GroupTemplate)
     return ,($all.ToArray())
 }

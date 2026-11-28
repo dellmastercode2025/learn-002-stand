@@ -8,8 +8,21 @@
 # =====================================================================
 
 $script:Api = @{ Key = ''; Ready = $false; SystemText = ''; Schema = $null; SchemaJson = ''; Fingerprint = ''
-                 Provider = 'claude'; BackupKey = ''; SchemaBackup = $null; BackupNoSchema = $false }
+                 Provider = 'claude'; BackupKey = ''; SchemaBackup = $null; BackupNoSchema = $false; Down = @{} }
 $script:Usage = @{ Requests = 0; Input = [long]0; Output = [long]0; CacheWrite = [long]0; CacheRead = [long]0; Failed = 0; Backup = 0 }
+
+function Get-ItemProvider($rec) {
+    # Какой сервис разбирает файл: PDF - Gemini (если так задано и есть ключ), остальное - Claude.
+    # Если нужный сервис перестал принимать запросы, файл уходит в другой. '' - ни один не доступен.
+    $claudeOk = ($script:Api.Key -and -not $script:Api.Down.ContainsKey('claude'))
+    $geminiOk = ($script:Api.BackupKey -and -not $script:Api.Down.ContainsKey('gemini'))
+    $pref = 'claude'
+    if ($rec.ext -eq '.pdf' -and (Get-Opt 'СервисДляPDF').Trim().ToLowerInvariant() -eq 'gemini') { $pref = 'gemini' }
+    if ($pref -eq 'gemini' -and $geminiOk) { return 'gemini' }
+    if ($claudeOk) { return 'claude' }
+    if ($geminiOk) { return 'gemini' }
+    return ''
+}
 
 function Get-ProviderName {
     if ($script:Api.Provider -eq 'gemini') { return 'Gemini' }

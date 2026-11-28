@@ -251,6 +251,7 @@ function Save-Plan($rows) {
     foreach ($t in $script:Cfg.Folders) { [void]$folders.Add(@($t.Path, $t.Desc)) }
     [void]$folders.Add(@($script:Cfg.ReviewFolder, 'Файлы, которые не удалось уверенно отнести ни к одной папке'))
     [void]$folders.Add(@($script:Cfg.ProtectedFolder, 'Файлы, защищённые паролем'))
+    if ($script:Cfg.ArchiveFolder) { [void]$folders.Add(@($script:Cfg.ArchiveFolder, 'Архивы .zip, .rar, .7z')) }
     $skip = New-Object System.Collections.ArrayList
     [void]$skip.Add(@('Папка', 'Почему не разбирается'))
     foreach ($s in $script:Scan.Skipped) { [void]$skip.Add(@($s.Rel, $s.Reason)) }

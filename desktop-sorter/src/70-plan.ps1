@@ -50,6 +50,7 @@ function Expand-FolderTemplate($template, $rec, $an) {
 }
 
 function Test-NoRenameDir([string]$dir) {
+    if ($script:Cfg.ArchiveFolder -and (Test-RelUnder $dir $script:Cfg.ArchiveFolder)) { return $true }
     foreach ($p in $script:Cfg.NoRename) { if (Test-RelUnder $dir $p) { return $true } }
     return $false
 }
@@ -278,6 +279,7 @@ function Build-Plan {
         $row.Movable = $true
         $folder = Get-Str $an 'folder'
         $conf = [double](Get-Val $an 'confidence' 0)
+        if ((Get-Str $an 'method') -eq 'по типу файла' -and $script:Cfg.ArchiveFolder) { $row.Template = $script:Cfg.ArchiveFolder; $row.DstDir = $script:Cfg.ArchiveFolder; continue }
         if ($rec.status -eq 'protected') { $row.Template = $script:Cfg.ProtectedFolder; $row.DstDir = $script:Cfg.ProtectedFolder; continue }
         if (-not $folder -or $folder -eq $script:Cfg.ReviewFolder) { $row.Template = $script:Cfg.ReviewFolder; $row.DstDir = (Get-ReviewDir $rec $an); continue }
         if ($conf -lt $thr) {
@@ -312,6 +314,7 @@ function Build-Plan {
     Find-ConclusionGroups $rows
 
     # --- Папки, которые переносятся целиком
+    $taken0 = @{}
     foreach ($u in $script:Scan.Units) {
         if ($u.Kind -eq 'tool') {
             if ($u.ContainsKey('Placed') -and $u.Placed) { continue }
@@ -319,6 +322,25 @@ function Build-Plan {
             if (-not $byRel.ContainsKey($key)) { continue }
             $row = $byRel[$key]
             $row.Kind = 'unit'; $row.Unit = $u
+        } elseif ($u.Kind -eq 'mail') {
+            # Папка с почтой: остаётся на месте, только к названию добавляется дата создания
+            if (-not $u.Main) { continue }
+            $key = $u.Main.ToLowerInvariant()
+            if (-not $byRel.ContainsKey($key)) { continue }
+            $row = $byRel[$key]
+            $row.Kind = 'unit'; $row.Unit = $u; $row.Mail = $true; $row.Movable = $false
+            $row.DstDir = Get-RelParent $row.Rec.rel; $row.DstName = $row.Rec.name
+            $folderName = Get-RelName $u.Folder
+            $stamp = ([datetime]$u.Created).ToString('dd-MM-yyyy', $script:Inv)
+            if ($folderName -match '\d{2}-\d{2}-\d{4}$') { $row.Note = 'папка с почтой, не разбирается'; continue }
+            $newDir = Join-RelParts (Get-RelParent $u.Folder) ($folderName + ' ' + $stamp)
+            if ($taken0.ContainsKey($newDir.ToLowerInvariant()) -or [IO.Directory]::Exists((Join-Rel $script:Root $newDir))) {
+                $row.Note = 'папка с почтой, не разбирается; папка с именем «' + (Get-RelName $newDir) + '» уже есть, название не изменено'; continue
+            }
+            $taken0[$newDir.ToLowerInvariant()] = $true
+            $row.UnitDst = $newDir
+            $row.Action = 'переименование папки'
+            $row.Note = "папка с почтой «$folderName» получает дату создания, её содержимое не трогается"
         } elseif ($u.Kind -eq 'page') {
             $key = $u.Main.ToLowerInvariant()
             if ($byRel.ContainsKey($key)) { $byRel[$key].Unit = $u; $byRel[$key].Kind = 'page' }
@@ -330,6 +352,7 @@ function Build-Plan {
     foreach ($row in $rows) {
         $rec = $row.Rec
         if ($row.Kind -eq 'attached') { continue }
+        if ($row.ContainsKey('Mail') -and $row.Mail) { continue }
         if (-not $row.Movable -and -not ($row.ContainsKey('KeepDir') -and $row.KeepDir)) { continue }
         $srcDir = Get-RelParent $rec.rel
         if ($row.Kind -eq 'unit') {

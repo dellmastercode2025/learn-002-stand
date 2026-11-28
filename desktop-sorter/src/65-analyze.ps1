@@ -17,6 +17,7 @@ function Get-InsTemplatePrefix {
 
 $script:TopicNames = New-Object System.Collections.ArrayList
 $script:TopicKeys = @{}
+$script:MailUnits = @{}
 
 function Add-TopicName([string]$name) {
     # Тема для папки «На разбор»: одинаковые по смыслу написания сводятся к одному названию
@@ -106,6 +107,7 @@ function Get-AnalysisQueue {
         $rec = $script:Db.Records[$id]
         if ($rec.missing) { continue }
         if ($rec.unit -and -not $rec.unitMain) { $rec.status = 'unit'; continue }
+        if ($rec.unit -and $script:MailUnits.ContainsKey($rec.unit.ToLowerInvariant())) { $rec.status = 'unit'; continue }
         if ($rec.attachedTo) { $rec.status = 'attached'; continue }
         if ($rec.hashError) { $rec.status = 'locked'; $rec.reason = $rec.hashError; continue }
         if ($rec.status -eq 'locked') { $rec.status = 'new'; $rec.reason = '' }
@@ -117,7 +119,9 @@ function Get-AnalysisQueue {
                 [void]$recheck.Add($rec)
                 continue
             }
-            if ((Get-Str $an 'fp') -eq $fp) { continue }
+            # Архив, разобранный раньше по содержимому, теперь просто переносится в папку архивов
+            $archiveAgain = ($script:Cfg.ArchiveFolder -and (Test-ArchiveExt $rec.ext) -and (Get-Str $an 'method') -ne 'по типу файла' -and -not $rec.placed)
+            if ((Get-Str $an 'fp') -eq $fp -and -not $archiveAgain) { continue }
             if ($rec.placed -and -not $inReview) { continue }
         }
         [void]$queue.Add($rec)
@@ -145,6 +149,11 @@ function Get-LocalDecision($rec, [bool]$useApi) {
     $mark = Find-DspMark $rec.name
     if ($mark) {
         Set-RecordResult $rec (New-LocalAnalysis 'не анализировался' '' 0 "пометка ДСП в имени файла («$mark»)") 'dsp' 'документ ДСП, программа его не трогает'
+        return @{ Send = $false }
+    }
+    if ($script:Cfg.ArchiveFolder -and (Test-ArchiveExt $rec.ext)) {
+        # Архив в модель не отправляется: он сразу идёт в папку архивов
+        Set-RecordResult $rec (New-LocalAnalysis 'по типу файла' $script:Cfg.ArchiveFolder 1 'архив, в модель не отправлялся') 'new' ''
         return @{ Send = $false }
     }
     $full = Join-Rel $script:Root $rec.rel
@@ -239,6 +248,7 @@ function Invoke-Analysis {
     if (-not $script:Api.Key -and -not $script:AutoYes) { $script:Api.Key = Request-ApiKey }
     # Запасной ключ (Gemini): спрашивается один раз, потом программа помнит ответ
     $script:Api.Provider = 'claude'
+    $script:Api.Down = @{}
     if ($script:Api.Key) {
         $bk = Read-BackupKey
         $script:Api.BackupKey = $bk.Key
@@ -255,8 +265,9 @@ function Invoke-Analysis {
     Say ''
     Say "Шаг 3. Анализ. Файлов к обработке: $($work.Count) (из них PDF: $pdf, изображений: $img)."
     if ($useApi) {
-        Say "  В Claude будет отправлено не больше $($work.Count) запросов, по одному на файл."
+        Say "  В модель будет отправлено не больше $($work.Count) запросов, по одному на файл."
         Say '  Документы с пометкой ДСП и файлы с паролем не отправляются.'
+        if ($pdf -gt 0 -and $script:Api.BackupKey -and (Get-Opt 'СервисДляPDF').Trim().ToLowerInvariant() -eq 'gemini') { Say "  PDF ($pdf) разбирает Gemini, остальные файлы - Claude." }
         if (-not $script:WinRT.Ocr -and ($pdf + $img) -gt 0 -and (Get-Opt 'ЕслиСканНеПроверен').ToLowerInvariant() -eq 'не отправлять' -and $env:DESKTOPSORTER_TEST_SCAN -ne '1') {
             Warn "Распознаватель русского текста недоступен, поэтому $($pdf + $img) PDF и изображений не будут отправлены в Claude и разложатся только по названию."
         }
@@ -272,7 +283,7 @@ function Invoke-Analysis {
     $deferred = New-Object System.Collections.ArrayList     # копии таких файлов ждут ответа
     $idx = 0; $done = 0; $total = $work.Count
     $failStreak = 0; $fatal = ''; $fatalStatus = 0; $stopped = $false
-    $netStreak = 0; $everOk = $false; $lastNetErr = ''      # попытки подряд без связи с сервисом
+    $netStreak = 0; $everOk = $false; $lastNetErr = ''; $gemNet = 0      # попытки подряд без связи с сервисом
     $pauseUntil = Get-Date
     $started = Get-Date
     $lastSave = Get-Date
@@ -295,10 +306,12 @@ function Invoke-Analysis {
                 $progress = $true
                 $r = Complete-ApiRequest $p.Net
                 $rec = $p.Rec
+                if ($p.ContainsKey('Via') -and $p.Via) { $script:Api.Provider = $p.Via }
                 $script:Usage.Requests++
                 if ($p.ContainsKey('Via') -and $p.Via -eq 'gemini') { $script:Usage.Backup++ }
                 if ($r.Status -eq 200) {
                     $netStreak = 0; $everOk = $true
+                    if ($script:Api.Provider -eq 'gemini') { $gemNet = 0 }
                     $parsed = ConvertFrom-ApiResponse $r.Body
                     if ($parsed.Ok) {
                         $failStreak = 0
@@ -333,8 +346,21 @@ function Invoke-Analysis {
                 $badBackupKey = ($script:Api.Provider -eq 'gemini' -and $r.Status -eq 400 -and $r.Body -match '(?i)api.key')
                 if ($badBackupKey) { $errText = 'запасной ключ Gemini не принят : ' + $errText }
                 if ($r.Status -eq 401 -or $r.Status -eq 402 -or $r.Status -eq 403 -or $r.Status -eq 404 -or $badBackupKey) {
-                    $fatal = $errText; $fatalStatus = $r.Status
+                    # Сервис перестал принимать запросы (деньги, ключ, модель): если второй сервис доступен,
+                    # файлы, которые шли сюда, уходят туда, иначе работа приостанавливается с вопросом
+                    $via = $script:Api.Provider
+                    if (-not $script:Api.Down.ContainsKey($via)) {
+                        $script:Api.Down[$via] = $errText
+                        $other = 'Gemini'; if ($via -eq 'gemini') { $other = 'Claude' }
+                        if (Get-ItemProvider $rec) {
+                            Clear-Status
+                            Warn "$(Get-ProviderName) недоступен: $errText."
+                            Say "Дальше эти файлы разбирает $other." 'Yellow'
+                        }
+                    }
+                    $p.Attempt = 0; $p.Revalidate = $false
                     [void]$retry.Add(@{ Item = $p; NotBefore = (Get-Date) })
+                    if (-not (Get-ItemProvider $rec)) { $fatal = $errText; $fatalStatus = $r.Status }
                     continue
                 }
                 if (($r.Status -eq 400 -or $r.Status -eq 413) -and -not $p.Drop -and $p.Content.Kind -ne 'meta') {
@@ -345,7 +371,23 @@ function Invoke-Analysis {
                     continue
                 }
                 $retryable = ($r.Network -or $r.Status -eq 408 -or $r.Status -eq 409 -or $r.Status -eq 429 -or $r.Status -ge 500)
-                if ($r.Network -or $r.Status -eq 408 -or ($r.Status -ge 500 -and $r.Status -ne 529)) { $netStreak++; $lastNetErr = $errText }
+                if ($r.Network -or $r.Status -eq 408 -or ($r.Status -ge 500 -and $r.Status -ne 529)) {
+                    $netStreak++; $lastNetErr = $errText
+                    # Нет связи только с Gemini, а Claude работает: PDF дальше идут в Claude
+                    if ($script:Api.Provider -eq 'gemini') {
+                        $gemNet++
+                        if ($gemNet -ge 4 -and $script:Api.Key -and -not $script:Api.Down.ContainsKey('claude') -and -not $script:Api.Down.ContainsKey('gemini')) {
+                            $script:Api.Down['gemini'] = $errText
+                            Clear-Status
+                            Warn "Gemini недоступен: нет связи ($errText)."
+                            Say 'Дальше эти файлы разбирает Claude.' 'Yellow'
+                            $netStreak = 0
+                            $p.Attempt = 0
+                            [void]$retry.Add(@{ Item = $p; NotBefore = (Get-Date) })
+                            continue
+                        }
+                    }
+                }
                 if ($retryable -and $p.Attempt -lt $maxRetry) {
                     $wait = $backoff[[Math]::Min($p.Attempt, $backoff.Count - 1)]
                     if ($r.RetryAfter -gt 0) { $wait = [Math]::Min(300, $r.RetryAfter) }
@@ -382,16 +424,6 @@ function Invoke-Analysis {
             $netLimit = [Math]::Max(8, 4 * $maxPar)
             if (-not $everOk) { $netLimit = [Math]::Max(4, 2 * $maxPar) }
             $hold = ($fatal -ne '' -or $failStreak -ge 5 -or $netStreak -ge $netLimit)
-            if ($hold -and $inflight.Count -eq 0 -and $fatal -ne '' -and $script:Api.Provider -eq 'claude' -and $script:Api.BackupKey -and
-                ($fatalStatus -eq 401 -or $fatalStatus -eq 402 -or $fatalStatus -eq 403)) {
-                # Claude больше не принимает запросы (кончились деньги или отклонён ключ): переход на запасной сервис
-                Clear-Status
-                Warn "Claude недоступен: $fatal."
-                Say 'Перехожу на запасной сервис Google Gemini. Файлы, оставшиеся без ответа, будут отправлены туда.' 'Yellow'
-                $script:Api.Provider = 'gemini'
-                $fatal = ''; $fatalStatus = 0; $failStreak = 0; $netStreak = 0; $hold = $false
-                foreach ($x in $retry) { $x.Item.Attempt = 0; $x.Item.Revalidate = $false; $x.NotBefore = (Get-Date) }
-            }
             if ($hold -and $inflight.Count -eq 0) {
                 Clear-Status
                 $why = $fatal
@@ -404,7 +436,7 @@ function Invoke-Analysis {
                     if ($env:ANTHROPIC_API_KEY) { Say 'Ключ взят из переменной среды ANTHROPIC_API_KEY. Исправьте её значение и запустите программу снова.' }
                     elseif (Ask-YesNo 'Ввести ключ заново?') {
                         $newKey = Request-ApiKey
-                        if ($newKey) { $script:Api.Key = $newKey; $again = $true }
+                        if ($newKey) { $script:Api.Key = $newKey; $script:Api.Down.Remove('claude'); $again = $true }
                     }
                 }
                 if ($again) { $fatal = ''; $fatalStatus = 0; $failStreak = 0; $netStreak = 0; $hold = $false }
@@ -464,6 +496,9 @@ function Invoke-Analysis {
                     $done++; $local++
                     continue
                 }
+                $prov = Get-ItemProvider $item.Rec
+                if (-not $prov) { [void]$retry.Add(@{ Item = $item; NotBefore = (Get-Date) }); if (-not $fatal) { $fatal = 'ни один сервис не принимает запросы'; $fatalStatus = 402 }; break }
+                $script:Api.Provider = $prov
                 try {
                     $json = Build-RequestBody $item.Rec $item.Content $item.Drop @($script:VndNames) @($script:InsNames)
                     $item.Net = Start-ApiRequest $json
@@ -512,7 +547,7 @@ function Invoke-Analysis {
 
     $u = $script:Usage
     Say ("  Обработано файлов: {0} из {1}. Запросов к модели: {2}, из них без ответа: {3}." -f $done, $total, $u.Requests, $u.Failed)
-    if ($u.Backup -gt 0) { Say ("  Из них через запасной сервис Gemini: {0}." -f $u.Backup) }
+    if ($u.Backup -gt 0) { Say ("  Из них через Gemini: {0}." -f $u.Backup) }
     if ($u.Requests -gt 0) {
         Say ("  Токены: входные {0}, из кэша {1}, записано в кэш {2}, выходные {3}." -f $u.Input, $u.CacheRead, $u.CacheWrite, $u.Output)
     }

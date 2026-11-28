@@ -542,6 +542,9 @@ $script:Defaults = @{
     'НазыватьВсеФайлыПоСодержимому'      = 'да'
     'НаРазборПоГодамИТемам'              = 'да'
     'ПересматриватьТемыНаРазбор'         = 'да'
+    'ПапкаДляАрхивов'                    = 'ZIP-архивы'
+    'ПапкиСПочтойНеРазбирать'            = 'да'
+    'СервисДляPDF'                       = 'gemini'
     'ЗапаснойСервис'                     = 'gemini'
     'ЗапаснаяМодель'                     = 'gemini-3.5-flash-lite'
     'АдресЗапасногоAPI'                  = 'https://generativelanguage.googleapis.com/v1beta/models'
@@ -669,6 +672,10 @@ function Initialize-Config([string]$path) {
     $script:Cfg.ProtectedFolder = ConvertTo-SafeName (Get-Opt 'ПапкаДляФайловСПаролем')
     if (-not $script:Cfg.ReviewFolder) { throw 'Файл настроек: параметр «ПапкаНаРазбор» не задан.' }
     if (-not $script:Cfg.ProtectedFolder) { throw 'Файл настроек: параметр «ПапкаДляФайловСПаролем» не задан.' }
+    # Архивы собираются в одну папку без обращения к модели; пустое значение - архивы разбираются как остальные файлы
+    $script:Cfg.ArchiveFolder = ConvertTo-SafeName (Get-Opt 'ПапкаДляАрхивов')
+    $pv = (Get-Opt 'СервисДляPDF').Trim().ToLowerInvariant()
+    if ($pv -ne 'gemini' -and $pv -ne 'claude') { throw 'Файл настроек: «СервисДляPDF» должен быть «gemini» или «claude».' }
     $script:Cfg.GroupTemplate = New-FolderTemplate (Get-Opt 'ПапкаЗаключенияСДоговором') '' 0
     if ($script:Cfg.GroupTemplate.Segs[-1] -ne '{папка заключения}') {
         throw 'Файл настроек: параметр «ПапкаЗаключенияСДоговором» должен заканчиваться подстановкой {папка заключения}.'
@@ -778,7 +785,7 @@ function Initialize-Config([string]$path) {
                      'МаксДлинаПути', 'МаксДлинаНазвания', 'МаксДлинаПапкиВНД')) { [void](Get-OptInt $n) }
     $thr = Get-OptNum 'ПорогУверенности'
     if ($thr -lt 0 -or $thr -gt 1) { throw 'Файл настроек: «ПорогУверенности» должен быть от 0 до 1.' }
-    foreach ($n in @('ПересчитыватьХешВсегда', 'СоздаватьВсюСтруктуру', 'РазбиратьНовыеФайлыВнутриСтруктуры', 'ОткрыватьПланПослеФормирования', 'НазыватьВсеФайлыПоСодержимому', 'НаРазборПоГодамИТемам', 'ПересматриватьТемыНаРазбор')) { [void](Get-OptBool $n) }
+    foreach ($n in @('ПересчитыватьХешВсегда', 'СоздаватьВсюСтруктуру', 'РазбиратьНовыеФайлыВнутриСтруктуры', 'ОткрыватьПланПослеФормирования', 'НазыватьВсеФайлыПоСодержимому', 'НаРазборПоГодамИТемам', 'ПересматриватьТемыНаРазбор', 'ПапкиСПочтойНеРазбирать')) { [void](Get-OptBool $n) }
     $mode = (Get-Opt 'РежимPDF').ToLowerInvariant()
     if ($mode -ne 'первая страница' -and $mode -ne 'целиком') { throw 'Файл настроек: «РежимPDF» должен быть «первая страница» или «целиком».' }
     $scan = (Get-Opt 'ЕслиСканНеПроверен').ToLowerInvariant()
@@ -802,6 +809,7 @@ function Get-AllTemplates {
     foreach ($t in $script:Cfg.Folders) { [void]$all.Add($t) }
     [void]$all.Add(@{ Path = $script:Cfg.ReviewFolder; Segs = @($script:Cfg.ReviewFolder); Desc = '' })
     [void]$all.Add(@{ Path = $script:Cfg.ProtectedFolder; Segs = @($script:Cfg.ProtectedFolder); Desc = '' })
+    if ($script:Cfg.ArchiveFolder) { [void]$all.Add(@{ Path = $script:Cfg.ArchiveFolder; Segs = @($script:Cfg.ArchiveFolder); Desc = '' }) }
     [void]$all.Add($script:Cfg.GroupTemplate)
     return ,($all.ToArray())
 }
@@ -2641,6 +2649,8 @@ $script:ExtHtml   = @('.html', '.htm')
 $script:ExtImage  = @('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tif', '.tiff', '.webp')
 $script:ExtBook   = @('.epub', '.fb2', '.djvu', '.djv')
 
+function Test-ArchiveExt([string]$ext) { return (@('.zip', '.rar', '.7z') -contains $ext) }
+
 function Get-FileContent([string]$full, [string]$name, [string]$ext, [long]$size) {
     # Возвращает хеш-таблицу:
     #   State - ok | meta | unverified | protected | corrupt | locked | dsp
@@ -2830,6 +2840,16 @@ function Find-PlacedToolMain([IO.DirectoryInfo]$di) {
     return ''
 }
 
+function Test-MailFolder([IO.DirectoryInfo]$di) {
+    # Папка с выгруженной почтой: не меньше двух писем, и письма - больше половины файлов в ней
+    if (-not (Get-OptBool 'ПапкиСПочтойНеРазбирать')) { return $false }
+    try {
+        $files = @($di.GetFiles() | Where-Object { ($_.Attributes -band $script:AttrHidSys) -eq 0 })
+        $mail = @($files | Where-Object { @('.msg', '.eml') -contains $_.Extension.ToLowerInvariant() }).Count
+        return ($mail -ge 2 -and $mail * 2 -gt $files.Count)
+    } catch { return $false }
+}
+
 function Add-ScanFile($fi, [string]$rel, [string]$unit, [bool]$unitMain) {
     [void]$script:Scan.Files.Add(@{
         Rel = $rel; Full = $fi.FullName; Name = $fi.Name; Ext = $fi.Extension.ToLowerInvariant()
@@ -2951,6 +2971,16 @@ function Scan-Dir([string]$full, [string]$rel, [string]$unit) {
         if (Test-ProgramDir $d 0) {
             [void]$script:Scan.Skipped.Add(@{ Rel = $drel; Reason = 'папка с программой (внутри есть .dll), не разбирается' }); continue
         }
+        if ($rel -ne $script:Cfg.ReviewFolder -and (Test-MailFolder $d)) {
+            # Папка с почтой: хранится целиком на своём месте, к названию добавляется дата создания
+            $before = $script:Scan.Files.Count
+            Scan-Dir $d.FullName $drel $drel
+            $main = ''
+            if ($script:Scan.Files.Count -gt $before) { $script:Scan.Files[$before].UnitMain = $true; $main = $script:Scan.Files[$before].Rel }
+            [void]$script:Scan.Units.Add(@{ Kind = 'mail'; Rel = $drel; Main = $main; Folder = $drel; Created = $d.CreationTime })
+            $script:MailUnits[$drel.ToLowerInvariant()] = $true
+            continue
+        }
         if (-not (Test-InStructure $drel)) {
             $main = Find-ToolFolderMain $d
             if ($main) {
@@ -2976,6 +3006,7 @@ function Invoke-Scan {
         Dirs = (New-Object System.Collections.ArrayList); ExcludedFiles = 0
     }
     # Папки инструментов из структуры: их вложенные папки переносятся и хранятся целиком
+    $script:MailUnits = @{}
     $script:ToolFolders = @($script:Cfg.Folders | Where-Object { $_.Path -match '(?i)инструмент' -and $_.Path -notmatch '\{' } | ForEach-Object { $_.Path })
     Scan-Dir $script:Root '' ''
     Clear-Status
@@ -3106,8 +3137,21 @@ function Sync-Scan {
 # =====================================================================
 
 $script:Api = @{ Key = ''; Ready = $false; SystemText = ''; Schema = $null; SchemaJson = ''; Fingerprint = ''
-                 Provider = 'claude'; BackupKey = ''; SchemaBackup = $null; BackupNoSchema = $false }
+                 Provider = 'claude'; BackupKey = ''; SchemaBackup = $null; BackupNoSchema = $false; Down = @{} }
 $script:Usage = @{ Requests = 0; Input = [long]0; Output = [long]0; CacheWrite = [long]0; CacheRead = [long]0; Failed = 0; Backup = 0 }
+
+function Get-ItemProvider($rec) {
+    # Какой сервис разбирает файл: PDF - Gemini (если так задано и есть ключ), остальное - Claude.
+    # Если нужный сервис перестал принимать запросы, файл уходит в другой. '' - ни один не доступен.
+    $claudeOk = ($script:Api.Key -and -not $script:Api.Down.ContainsKey('claude'))
+    $geminiOk = ($script:Api.BackupKey -and -not $script:Api.Down.ContainsKey('gemini'))
+    $pref = 'claude'
+    if ($rec.ext -eq '.pdf' -and (Get-Opt 'СервисДляPDF').Trim().ToLowerInvariant() -eq 'gemini') { $pref = 'gemini' }
+    if ($pref -eq 'gemini' -and $geminiOk) { return 'gemini' }
+    if ($claudeOk) { return 'claude' }
+    if ($geminiOk) { return 'gemini' }
+    return ''
+}
 
 function Get-ProviderName {
     if ($script:Api.Provider -eq 'gemini') { return 'Gemini' }
@@ -3688,6 +3732,7 @@ function Get-InsTemplatePrefix {
 
 $script:TopicNames = New-Object System.Collections.ArrayList
 $script:TopicKeys = @{}
+$script:MailUnits = @{}
 
 function Add-TopicName([string]$name) {
     # Тема для папки «На разбор»: одинаковые по смыслу написания сводятся к одному названию
@@ -3777,6 +3822,7 @@ function Get-AnalysisQueue {
         $rec = $script:Db.Records[$id]
         if ($rec.missing) { continue }
         if ($rec.unit -and -not $rec.unitMain) { $rec.status = 'unit'; continue }
+        if ($rec.unit -and $script:MailUnits.ContainsKey($rec.unit.ToLowerInvariant())) { $rec.status = 'unit'; continue }
         if ($rec.attachedTo) { $rec.status = 'attached'; continue }
         if ($rec.hashError) { $rec.status = 'locked'; $rec.reason = $rec.hashError; continue }
         if ($rec.status -eq 'locked') { $rec.status = 'new'; $rec.reason = '' }
@@ -3788,7 +3834,9 @@ function Get-AnalysisQueue {
                 [void]$recheck.Add($rec)
                 continue
             }
-            if ((Get-Str $an 'fp') -eq $fp) { continue }
+            # Архив, разобранный раньше по содержимому, теперь просто переносится в папку архивов
+            $archiveAgain = ($script:Cfg.ArchiveFolder -and (Test-ArchiveExt $rec.ext) -and (Get-Str $an 'method') -ne 'по типу файла' -and -not $rec.placed)
+            if ((Get-Str $an 'fp') -eq $fp -and -not $archiveAgain) { continue }
             if ($rec.placed -and -not $inReview) { continue }
         }
         [void]$queue.Add($rec)
@@ -3816,6 +3864,11 @@ function Get-LocalDecision($rec, [bool]$useApi) {
     $mark = Find-DspMark $rec.name
     if ($mark) {
         Set-RecordResult $rec (New-LocalAnalysis 'не анализировался' '' 0 "пометка ДСП в имени файла («$mark»)") 'dsp' 'документ ДСП, программа его не трогает'
+        return @{ Send = $false }
+    }
+    if ($script:Cfg.ArchiveFolder -and (Test-ArchiveExt $rec.ext)) {
+        # Архив в модель не отправляется: он сразу идёт в папку архивов
+        Set-RecordResult $rec (New-LocalAnalysis 'по типу файла' $script:Cfg.ArchiveFolder 1 'архив, в модель не отправлялся') 'new' ''
         return @{ Send = $false }
     }
     $full = Join-Rel $script:Root $rec.rel
@@ -3910,6 +3963,7 @@ function Invoke-Analysis {
     if (-not $script:Api.Key -and -not $script:AutoYes) { $script:Api.Key = Request-ApiKey }
     # Запасной ключ (Gemini): спрашивается один раз, потом программа помнит ответ
     $script:Api.Provider = 'claude'
+    $script:Api.Down = @{}
     if ($script:Api.Key) {
         $bk = Read-BackupKey
         $script:Api.BackupKey = $bk.Key
@@ -3926,8 +3980,9 @@ function Invoke-Analysis {
     Say ''
     Say "Шаг 3. Анализ. Файлов к обработке: $($work.Count) (из них PDF: $pdf, изображений: $img)."
     if ($useApi) {
-        Say "  В Claude будет отправлено не больше $($work.Count) запросов, по одному на файл."
+        Say "  В модель будет отправлено не больше $($work.Count) запросов, по одному на файл."
         Say '  Документы с пометкой ДСП и файлы с паролем не отправляются.'
+        if ($pdf -gt 0 -and $script:Api.BackupKey -and (Get-Opt 'СервисДляPDF').Trim().ToLowerInvariant() -eq 'gemini') { Say "  PDF ($pdf) разбирает Gemini, остальные файлы - Claude." }
         if (-not $script:WinRT.Ocr -and ($pdf + $img) -gt 0 -and (Get-Opt 'ЕслиСканНеПроверен').ToLowerInvariant() -eq 'не отправлять' -and $env:DESKTOPSORTER_TEST_SCAN -ne '1') {
             Warn "Распознаватель русского текста недоступен, поэтому $($pdf + $img) PDF и изображений не будут отправлены в Claude и разложатся только по названию."
         }
@@ -3943,7 +3998,7 @@ function Invoke-Analysis {
     $deferred = New-Object System.Collections.ArrayList     # копии таких файлов ждут ответа
     $idx = 0; $done = 0; $total = $work.Count
     $failStreak = 0; $fatal = ''; $fatalStatus = 0; $stopped = $false
-    $netStreak = 0; $everOk = $false; $lastNetErr = ''      # попытки подряд без связи с сервисом
+    $netStreak = 0; $everOk = $false; $lastNetErr = ''; $gemNet = 0      # попытки подряд без связи с сервисом
     $pauseUntil = Get-Date
     $started = Get-Date
     $lastSave = Get-Date
@@ -3966,10 +4021,12 @@ function Invoke-Analysis {
                 $progress = $true
                 $r = Complete-ApiRequest $p.Net
                 $rec = $p.Rec
+                if ($p.ContainsKey('Via') -and $p.Via) { $script:Api.Provider = $p.Via }
                 $script:Usage.Requests++
                 if ($p.ContainsKey('Via') -and $p.Via -eq 'gemini') { $script:Usage.Backup++ }
                 if ($r.Status -eq 200) {
                     $netStreak = 0; $everOk = $true
+                    if ($script:Api.Provider -eq 'gemini') { $gemNet = 0 }
                     $parsed = ConvertFrom-ApiResponse $r.Body
                     if ($parsed.Ok) {
                         $failStreak = 0
@@ -4004,8 +4061,21 @@ function Invoke-Analysis {
                 $badBackupKey = ($script:Api.Provider -eq 'gemini' -and $r.Status -eq 400 -and $r.Body -match '(?i)api.key')
                 if ($badBackupKey) { $errText = 'запасной ключ Gemini не принят : ' + $errText }
                 if ($r.Status -eq 401 -or $r.Status -eq 402 -or $r.Status -eq 403 -or $r.Status -eq 404 -or $badBackupKey) {
-                    $fatal = $errText; $fatalStatus = $r.Status
+                    # Сервис перестал принимать запросы (деньги, ключ, модель): если второй сервис доступен,
+                    # файлы, которые шли сюда, уходят туда, иначе работа приостанавливается с вопросом
+                    $via = $script:Api.Provider
+                    if (-not $script:Api.Down.ContainsKey($via)) {
+                        $script:Api.Down[$via] = $errText
+                        $other = 'Gemini'; if ($via -eq 'gemini') { $other = 'Claude' }
+                        if (Get-ItemProvider $rec) {
+                            Clear-Status
+                            Warn "$(Get-ProviderName) недоступен: $errText."
+                            Say "Дальше эти файлы разбирает $other." 'Yellow'
+                        }
+                    }
+                    $p.Attempt = 0; $p.Revalidate = $false
                     [void]$retry.Add(@{ Item = $p; NotBefore = (Get-Date) })
+                    if (-not (Get-ItemProvider $rec)) { $fatal = $errText; $fatalStatus = $r.Status }
                     continue
                 }
                 if (($r.Status -eq 400 -or $r.Status -eq 413) -and -not $p.Drop -and $p.Content.Kind -ne 'meta') {
@@ -4016,7 +4086,23 @@ function Invoke-Analysis {
                     continue
                 }
                 $retryable = ($r.Network -or $r.Status -eq 408 -or $r.Status -eq 409 -or $r.Status -eq 429 -or $r.Status -ge 500)
-                if ($r.Network -or $r.Status -eq 408 -or ($r.Status -ge 500 -and $r.Status -ne 529)) { $netStreak++; $lastNetErr = $errText }
+                if ($r.Network -or $r.Status -eq 408 -or ($r.Status -ge 500 -and $r.Status -ne 529)) {
+                    $netStreak++; $lastNetErr = $errText
+                    # Нет связи только с Gemini, а Claude работает: PDF дальше идут в Claude
+                    if ($script:Api.Provider -eq 'gemini') {
+                        $gemNet++
+                        if ($gemNet -ge 4 -and $script:Api.Key -and -not $script:Api.Down.ContainsKey('claude') -and -not $script:Api.Down.ContainsKey('gemini')) {
+                            $script:Api.Down['gemini'] = $errText
+                            Clear-Status
+                            Warn "Gemini недоступен: нет связи ($errText)."
+                            Say 'Дальше эти файлы разбирает Claude.' 'Yellow'
+                            $netStreak = 0
+                            $p.Attempt = 0
+                            [void]$retry.Add(@{ Item = $p; NotBefore = (Get-Date) })
+                            continue
+                        }
+                    }
+                }
                 if ($retryable -and $p.Attempt -lt $maxRetry) {
                     $wait = $backoff[[Math]::Min($p.Attempt, $backoff.Count - 1)]
                     if ($r.RetryAfter -gt 0) { $wait = [Math]::Min(300, $r.RetryAfter) }
@@ -4053,16 +4139,6 @@ function Invoke-Analysis {
             $netLimit = [Math]::Max(8, 4 * $maxPar)
             if (-not $everOk) { $netLimit = [Math]::Max(4, 2 * $maxPar) }
             $hold = ($fatal -ne '' -or $failStreak -ge 5 -or $netStreak -ge $netLimit)
-            if ($hold -and $inflight.Count -eq 0 -and $fatal -ne '' -and $script:Api.Provider -eq 'claude' -and $script:Api.BackupKey -and
-                ($fatalStatus -eq 401 -or $fatalStatus -eq 402 -or $fatalStatus -eq 403)) {
-                # Claude больше не принимает запросы (кончились деньги или отклонён ключ): переход на запасной сервис
-                Clear-Status
-                Warn "Claude недоступен: $fatal."
-                Say 'Перехожу на запасной сервис Google Gemini. Файлы, оставшиеся без ответа, будут отправлены туда.' 'Yellow'
-                $script:Api.Provider = 'gemini'
-                $fatal = ''; $fatalStatus = 0; $failStreak = 0; $netStreak = 0; $hold = $false
-                foreach ($x in $retry) { $x.Item.Attempt = 0; $x.Item.Revalidate = $false; $x.NotBefore = (Get-Date) }
-            }
             if ($hold -and $inflight.Count -eq 0) {
                 Clear-Status
                 $why = $fatal
@@ -4075,7 +4151,7 @@ function Invoke-Analysis {
                     if ($env:ANTHROPIC_API_KEY) { Say 'Ключ взят из переменной среды ANTHROPIC_API_KEY. Исправьте её значение и запустите программу снова.' }
                     elseif (Ask-YesNo 'Ввести ключ заново?') {
                         $newKey = Request-ApiKey
-                        if ($newKey) { $script:Api.Key = $newKey; $again = $true }
+                        if ($newKey) { $script:Api.Key = $newKey; $script:Api.Down.Remove('claude'); $again = $true }
                     }
                 }
                 if ($again) { $fatal = ''; $fatalStatus = 0; $failStreak = 0; $netStreak = 0; $hold = $false }
@@ -4135,6 +4211,9 @@ function Invoke-Analysis {
                     $done++; $local++
                     continue
                 }
+                $prov = Get-ItemProvider $item.Rec
+                if (-not $prov) { [void]$retry.Add(@{ Item = $item; NotBefore = (Get-Date) }); if (-not $fatal) { $fatal = 'ни один сервис не принимает запросы'; $fatalStatus = 402 }; break }
+                $script:Api.Provider = $prov
                 try {
                     $json = Build-RequestBody $item.Rec $item.Content $item.Drop @($script:VndNames) @($script:InsNames)
                     $item.Net = Start-ApiRequest $json
@@ -4183,7 +4262,7 @@ function Invoke-Analysis {
 
     $u = $script:Usage
     Say ("  Обработано файлов: {0} из {1}. Запросов к модели: {2}, из них без ответа: {3}." -f $done, $total, $u.Requests, $u.Failed)
-    if ($u.Backup -gt 0) { Say ("  Из них через запасной сервис Gemini: {0}." -f $u.Backup) }
+    if ($u.Backup -gt 0) { Say ("  Из них через Gemini: {0}." -f $u.Backup) }
     if ($u.Requests -gt 0) {
         Say ("  Токены: входные {0}, из кэша {1}, записано в кэш {2}, выходные {3}." -f $u.Input, $u.CacheRead, $u.CacheWrite, $u.Output)
     }
@@ -4367,6 +4446,7 @@ function Expand-FolderTemplate($template, $rec, $an) {
 }
 
 function Test-NoRenameDir([string]$dir) {
+    if ($script:Cfg.ArchiveFolder -and (Test-RelUnder $dir $script:Cfg.ArchiveFolder)) { return $true }
     foreach ($p in $script:Cfg.NoRename) { if (Test-RelUnder $dir $p) { return $true } }
     return $false
 }
@@ -4595,6 +4675,7 @@ function Build-Plan {
         $row.Movable = $true
         $folder = Get-Str $an 'folder'
         $conf = [double](Get-Val $an 'confidence' 0)
+        if ((Get-Str $an 'method') -eq 'по типу файла' -and $script:Cfg.ArchiveFolder) { $row.Template = $script:Cfg.ArchiveFolder; $row.DstDir = $script:Cfg.ArchiveFolder; continue }
         if ($rec.status -eq 'protected') { $row.Template = $script:Cfg.ProtectedFolder; $row.DstDir = $script:Cfg.ProtectedFolder; continue }
         if (-not $folder -or $folder -eq $script:Cfg.ReviewFolder) { $row.Template = $script:Cfg.ReviewFolder; $row.DstDir = (Get-ReviewDir $rec $an); continue }
         if ($conf -lt $thr) {
@@ -4629,6 +4710,7 @@ function Build-Plan {
     Find-ConclusionGroups $rows
 
     # --- Папки, которые переносятся целиком
+    $taken0 = @{}
     foreach ($u in $script:Scan.Units) {
         if ($u.Kind -eq 'tool') {
             if ($u.ContainsKey('Placed') -and $u.Placed) { continue }
@@ -4636,6 +4718,25 @@ function Build-Plan {
             if (-not $byRel.ContainsKey($key)) { continue }
             $row = $byRel[$key]
             $row.Kind = 'unit'; $row.Unit = $u
+        } elseif ($u.Kind -eq 'mail') {
+            # Папка с почтой: остаётся на месте, только к названию добавляется дата создания
+            if (-not $u.Main) { continue }
+            $key = $u.Main.ToLowerInvariant()
+            if (-not $byRel.ContainsKey($key)) { continue }
+            $row = $byRel[$key]
+            $row.Kind = 'unit'; $row.Unit = $u; $row.Mail = $true; $row.Movable = $false
+            $row.DstDir = Get-RelParent $row.Rec.rel; $row.DstName = $row.Rec.name
+            $folderName = Get-RelName $u.Folder
+            $stamp = ([datetime]$u.Created).ToString('dd-MM-yyyy', $script:Inv)
+            if ($folderName -match '\d{2}-\d{2}-\d{4}$') { $row.Note = 'папка с почтой, не разбирается'; continue }
+            $newDir = Join-RelParts (Get-RelParent $u.Folder) ($folderName + ' ' + $stamp)
+            if ($taken0.ContainsKey($newDir.ToLowerInvariant()) -or [IO.Directory]::Exists((Join-Rel $script:Root $newDir))) {
+                $row.Note = 'папка с почтой, не разбирается; папка с именем «' + (Get-RelName $newDir) + '» уже есть, название не изменено'; continue
+            }
+            $taken0[$newDir.ToLowerInvariant()] = $true
+            $row.UnitDst = $newDir
+            $row.Action = 'переименование папки'
+            $row.Note = "папка с почтой «$folderName» получает дату создания, её содержимое не трогается"
         } elseif ($u.Kind -eq 'page') {
             $key = $u.Main.ToLowerInvariant()
             if ($byRel.ContainsKey($key)) { $byRel[$key].Unit = $u; $byRel[$key].Kind = 'page' }
@@ -4647,6 +4748,7 @@ function Build-Plan {
     foreach ($row in $rows) {
         $rec = $row.Rec
         if ($row.Kind -eq 'attached') { continue }
+        if ($row.ContainsKey('Mail') -and $row.Mail) { continue }
         if (-not $row.Movable -and -not ($row.ContainsKey('KeepDir') -and $row.KeepDir)) { continue }
         $srcDir = Get-RelParent $rec.rel
         if ($row.Kind -eq 'unit') {
@@ -4975,6 +5077,7 @@ function Save-Plan($rows) {
     foreach ($t in $script:Cfg.Folders) { [void]$folders.Add(@($t.Path, $t.Desc)) }
     [void]$folders.Add(@($script:Cfg.ReviewFolder, 'Файлы, которые не удалось уверенно отнести ни к одной папке'))
     [void]$folders.Add(@($script:Cfg.ProtectedFolder, 'Файлы, защищённые паролем'))
+    if ($script:Cfg.ArchiveFolder) { [void]$folders.Add(@($script:Cfg.ArchiveFolder, 'Архивы .zip, .rar, .7z')) }
     $skip = New-Object System.Collections.ArrayList
     [void]$skip.Add(@('Папка', 'Почему не разбирается'))
     foreach ($s in $script:Scan.Skipped) { [void]$skip.Add(@($s.Rel, $s.Reason)) }
@@ -5384,7 +5487,8 @@ function Invoke-Apply($rows) {
                 }
                 foreach ($m in $members) {
                     $m.rel = Join-RelParts $unitDst $m.rel.Substring($unitSrc.Length).TrimStart('\')
-                    $m.unit = $unitDst; $m.placed = $true; $m.placedBy = 'программа'; $m.home = (Get-RelParent $m.rel)
+                    $m.unit = $unitDst; $m.home = (Get-RelParent $m.rel)
+                    if ($r.action -ne 'переименование папки') { $m.placed = $true; $m.placedBy = 'программа' }
                     if ($m.status -ne 'unit') { $m.status = 'placed' }
                 }
                 Write-Journal $op.Id $id $op.Type $op.Src $op.Dst '' 'Выполнено' '' ''
